@@ -6,6 +6,14 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
+from tests.fixtures.generate import generate_all
+
+
+@pytest.fixture(scope="session")
+def fixtures_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    out = tmp_path_factory.mktemp("fixtures")
+    generate_all(out)
+    return out
 
 
 @pytest.fixture

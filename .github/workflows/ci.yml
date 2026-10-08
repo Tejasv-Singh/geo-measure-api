@@ -17,7 +17,7 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: ruff format --check .
-      - run: mypy app
+      - run: mypy app tests
       - run: pytest
 
   docker:
