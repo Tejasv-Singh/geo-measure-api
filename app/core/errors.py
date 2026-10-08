@@ -52,6 +52,16 @@ class InvalidCRSError(AppError):
     code = "invalid_crs"
 
 
+class FileNotReadyError(AppError):
+    status_code = status.HTTP_409_CONFLICT
+    code = "not_ready"
+
+
+class FileFailedError(AppError):
+    status_code = status.HTTP_409_CONFLICT
+    code = "file_failed"
+
+
 def error_body(code: str, message: str, details: Any = None) -> dict[str, Any]:
     return {"error": {"code": code, "message": message, "details": details}}
 

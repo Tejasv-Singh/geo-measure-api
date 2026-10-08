@@ -5,7 +5,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app import __version__
-from app.api.routes import health
+from app.api.middleware import UploadSizeLimitMiddleware
+from app.api.routes import files, health
 from app.core.config import Settings, get_settings
 from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging
@@ -43,7 +44,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title=settings.app_name, version=__version__, lifespan=lifespan)
     app.state.settings = settings
     register_error_handlers(app)
+    app.add_middleware(
+        UploadSizeLimitMiddleware, path="/api/files/", max_file_bytes=settings.max_upload_bytes
+    )
     app.include_router(health.router)
+    app.include_router(files.router)
     return app
 
 
