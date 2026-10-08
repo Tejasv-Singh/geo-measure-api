@@ -11,7 +11,10 @@ COPY pyproject.toml README.md ./
 COPY app ./app
 RUN pip install ".[postgres]"
 
-RUN useradd --create-home appuser && mkdir -p /app/data && chown appuser /app/data
+# Compose mounts a volume at /app/data/uploads; it must exist here or Docker creates it root-owned.
+RUN useradd --create-home appuser \
+    && mkdir -p /app/data/uploads \
+    && chown -R appuser /app/data
 USER appuser
 
 EXPOSE 8000
