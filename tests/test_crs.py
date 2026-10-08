@@ -7,6 +7,7 @@ from app.core.errors import InvalidCRSError, MissingCRSError
 from app.services.crs import (
     MIXED,
     crs_label,
+    crs_wkt,
     parse_crs,
     resolve_layer_crs,
     summarize_crs,
@@ -61,9 +62,25 @@ def test_crs_label_prefers_authority_code() -> None:
     assert crs_label(CRS.from_wkt(ESRI_UTM_43N)) == "EPSG:32643"
 
 
-def test_crs_label_falls_back_to_wkt() -> None:
-    custom = CRS.from_proj4("+proj=laea +lat_0=10 +lon_0=20 +datum=WGS84 +units=m")
-    assert crs_label(custom).startswith("PROJCRS[")
+def test_esri_prj_without_authority_is_labelled_by_name(fixtures_dir: Path) -> None:
+    path = fixtures_dir / "shapefile_kalianpur.zip"
+    zone = reader_for(path.name, max_uncompressed_bytes=10**8).read(path).layers[1]
+    assert zone.name == "zone" and zone.crs is not None
+
+    assert zone.crs.to_authority() is None
+    assert crs_label(zone.crs) == "Kalianpur_1975_India_Zone_IIIa"
+    assert crs_wkt(zone.crs).startswith("PROJCRS[")
+    assert len(crs_wkt(zone.crs)) > 500
+
+
+def test_different_crs_with_the_same_name_are_mixed(fixtures_dir: Path) -> None:
+    path = fixtures_dir / "shapefile_kalianpur.zip"
+    layers = reader_for(path.name, max_uncompressed_bytes=10**8).read(path).layers
+    crs_list = [layer.crs for layer in layers if layer.crs is not None]
+
+    assert len(crs_list) == 2
+    assert len({crs_label(crs) for crs in crs_list}) == 1
+    assert summarize_crs(crs_list) == MIXED
 
 
 def test_summarize_crs() -> None:

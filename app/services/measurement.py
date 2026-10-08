@@ -137,6 +137,10 @@ def plan(geometry: BaseGeometry | None) -> list[Measurement | Target]:
     status = MeasurementStatus.INVALID_GEOMETRY if repair_note else MeasurementStatus.OK
     polygons, lines, points = split_parts(repaired)
     is_collection = geometry_type == COLLECTION
+    if is_collection:
+        # Overlapping parts of a collection would otherwise be counted twice.
+        polygons = merge(polygons, Polygon)
+        lines = merge(lines, LineString)
 
     planned: list[Measurement | Target] = []
     if geometry_type in POLYGONAL or (is_collection and polygons):
@@ -149,9 +153,8 @@ def plan(geometry: BaseGeometry | None) -> list[Measurement | Target]:
         )
     if geometry_type in LINEAR or (is_collection and lines):
         planned.append(
-            Target(
-                MeasurementKind.LENGTH,
-                MultiLineString([LineString(line.coords) for line in lines]),
+            length_target(
+                lines,
                 status,
                 join(repair_note, collection_note(is_collection, lines, "line", points)),
             )
@@ -177,6 +180,25 @@ def area_target(
             note=join(note, "No polygonal part is left after make_valid."),
         )
     return Target(MeasurementKind.AREA, MultiPolygon(polygons), status, note)
+
+
+def length_target(
+    lines: list[LineString], status: MeasurementStatus, note: str | None
+) -> Measurement | Target:
+    if not lines:
+        return Measurement(
+            MeasurementKind.LENGTH,
+            MeasurementStatus.INVALID_GEOMETRY,
+            note=join(note, "No linear part is left after make_valid."),
+        )
+    geometry = MultiLineString([LineString(line.coords) for line in lines])
+    return Target(MeasurementKind.LENGTH, geometry, status, note)
+
+
+def merge[T: BaseGeometry](parts: list[T], part_type: type[T]) -> list[T]:
+    if len(parts) < 2:
+        return parts
+    return [part for part in flatten(shapely.union_all(parts)) if isinstance(part, part_type)]
 
 
 def repair(geometry: BaseGeometry) -> tuple[BaseGeometry, str | None]:
@@ -215,7 +237,7 @@ def collection_note(
 ) -> str | None:
     if not is_collection:
         return None
-    note = f"Summed {len(parts)} {noun} part(s) of a GeometryCollection."
+    note = f"Merged the {noun} parts of a GeometryCollection into {len(parts)} {noun}(s)."
     return f"{note} Ignored {len(points)} point part(s)." if points else note
 
 
@@ -237,7 +259,12 @@ def measure_targets(targets: Sequence[Target], crs: CRS) -> list[Measurement]:
     measurements: list[Measurement] = []
     for position, (target, geometry) in enumerate(zip(targets, geographic, strict=True)):
         result = by_position.get(position)
-        if result is None or geometry is None:
+        if geometry is None or geometry.is_empty:
+            measurements.append(
+                Measurement(kind, MeasurementStatus.EMPTY, note="Nothing is left to measure.")
+            )
+            continue
+        if result is None:
             measurements.append(
                 unsupported(
                     kind,

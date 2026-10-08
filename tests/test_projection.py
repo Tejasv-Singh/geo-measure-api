@@ -1,9 +1,16 @@
 import geopandas as gpd
 import pytest
+from pyproj import CRS
 from shapely.geometry import LineString, box
 
 from app.services.crs import WGS84
-from app.services.projection import LocalEqualAreaStrategy, UTMStrategy, utm_epsg
+from app.services.projection import (
+    LocalEqualAreaStrategy,
+    UTMStrategy,
+    laea_centre,
+    laea_projection,
+    utm_epsg,
+)
 
 
 @pytest.mark.parametrize(
@@ -44,8 +51,50 @@ def test_utm_switches_to_ups_near_the_poles() -> None:
     assert north.projection.note is not None and "UPS" in north.projection.note
 
 
-def test_local_equal_area_is_centred_on_the_feature() -> None:
+def test_local_equal_area_centre_snaps_to_the_middle_of_a_degree_cell() -> None:
     projection = LocalEqualAreaStrategy().projection_for(box(77.19, 28.59, 77.21, 28.61))
 
     assert projection.method == "laea"
-    assert "+lat_0=28.600000 +lon_0=77.200000" in projection.label
+    assert "+lat_0=28.5 +lon_0=77.5" in projection.label
+
+
+@pytest.mark.parametrize(
+    ("lon", "lat", "centre"),
+    [
+        (77.2, 28.6, (77.5, 28.5)),
+        (-0.3, -0.3, (-0.5, -0.5)),
+        (180.0, 90.0, (179.5, 89.5)),
+        (-180.0, -90.0, (-179.5, -89.5)),
+    ],
+)
+def test_laea_centre(lon: float, lat: float, centre: tuple[float, float]) -> None:
+    assert laea_centre(lon, lat) == centre
+
+
+@pytest.mark.parametrize(("lon", "lat"), [(77.0, 28.0), (10.0, 60.0), (170.0, -45.0)])
+def test_snapped_centre_gives_the_same_area_as_a_per_feature_centre(lon: float, lat: float) -> None:
+    # About 50 km across and off-centre in its cell, so the snapped centre is well away.
+    square = box(lon + 0.02, lat + 0.02, lon + 0.47, lat + 0.47)
+    point = square.representative_point()
+    own = CRS.from_proj4(f"+proj=laea +lat_0={point.y} +lon_0={point.x} +datum=WGS84 +units=m")
+
+    (snapped,) = LocalEqualAreaStrategy().project([square])
+    exact = gpd.GeoSeries([square], crs=WGS84).to_crs(own).iloc[0]
+
+    assert snapped.geometry.area == pytest.approx(exact.area, rel=1e-6)
+
+
+def test_layer_over_three_by_three_degrees_builds_at_most_nine_crs() -> None:
+    squares = [
+        box(lon + offset, lat + offset, lon + offset + 0.01, lat + offset + 0.01)
+        for lon in (77, 78, 79)
+        for lat in (28, 29, 30)
+        for offset in (0.1, 0.4, 0.7)
+    ]
+    laea_projection.cache_clear()
+
+    projected = LocalEqualAreaStrategy().project(squares)
+
+    assert len(projected) == 27
+    assert laea_projection.cache_info().misses <= 9
+    assert len({p.projection.label for p in projected}) == 9

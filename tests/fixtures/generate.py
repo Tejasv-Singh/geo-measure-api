@@ -22,6 +22,26 @@ from shapely.geometry import (
 from shapely.geometry.base import BaseGeometry
 
 UTM_43N = "EPSG:32643"
+# ArcGIS-style .prj files that pyproj cannot match to an EPSG code. Both share one name.
+KALIANPUR_IIIA_2SP = (
+    'PROJCS["Kalianpur_1975_India_Zone_IIIa",GEOGCS["GCS_Kalianpur_1975",'
+    'DATUM["D_Kalianpur_1975",SPHEROID["Everest_Definition_1975",6377299.151,300.8017255]],'
+    'PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],'
+    'PROJECTION["Lambert_Conformal_Conic"],PARAMETER["False_Easting",2743195.5],'
+    'PARAMETER["False_Northing",914398.5],PARAMETER["Central_Meridian",80.0],'
+    'PARAMETER["Standard_Parallel_1",19.0],PARAMETER["Standard_Parallel_2",19.0],'
+    'PARAMETER["Scale_Factor",0.99878641],PARAMETER["Latitude_Of_Origin",19.0],'
+    'UNIT["Meter",1.0]]'
+)
+KALIANPUR_IIIA_EVEREST_1830 = (
+    'PROJCS["Kalianpur_1975_India_Zone_IIIa",GEOGCS["GCS_Kalianpur_1975",'
+    'DATUM["D_Kalianpur_1975",SPHEROID["Everest_1830",6377276.345,300.8017]],'
+    'PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],'
+    'PROJECTION["Lambert_Conformal_Conic"],PARAMETER["False_Easting",2743195.5],'
+    'PARAMETER["False_Northing",914398.5],PARAMETER["Central_Meridian",80.0],'
+    'PARAMETER["Standard_Parallel_1",19.0],PARAMETER["Scale_Factor",0.99878641],'
+    'PARAMETER["Latitude_Of_Origin",19.0],UNIT["Meter",1.0]]'
+)
 # About 180 km east of the zone 43N central meridian, where the UTM scale factor is close to 1,
 # so a 1 km grid square is also 1 km2 on the ground. At the central meridian it is 0.9996.
 GOLDEN_EASTING = 680_000
@@ -116,6 +136,20 @@ def shapefile_corrupt_shp(out: Path) -> Path:
     parts = write_shapefile_parts(parcels_frame(), "parcels")
     parts["parcels.shp"] = bytes(10)
     return write_zip(out / "shapefile_corrupt_shp.zip", in_folder("data", parts))
+
+
+def shapefile_kalianpur(out: Path) -> Path:
+    """Two layers whose .prj files share a CRS name but differ in their ellipsoid."""
+    frame = gpd.GeoDataFrame(
+        {"name": ["Survey line"]},
+        geometry=[LineString([(2_743_195, 914_398), (2_744_195, 914_398)])],
+    )
+    zone = write_shapefile_parts(frame, "zone")
+    zone["zone.prj"] = KALIANPUR_IIIA_2SP.encode("ascii")
+    legacy = write_shapefile_parts(frame, "legacy")
+    legacy["legacy.prj"] = KALIANPUR_IIIA_EVEREST_1830.encode("ascii")
+    members = [*in_folder("", zone), *in_folder("", legacy)]
+    return write_zip(out / "shapefile_kalianpur.zip", members)
 
 
 def shapefile_cp1251(out: Path) -> Path:
@@ -307,6 +341,7 @@ GENERATORS: tuple[Callable[[Path], Path], ...] = (
     shapefile_corrupt_dbf,
     shapefile_bad_prj,
     shapefile_corrupt_shp,
+    shapefile_kalianpur,
     shapefile_cp1251,
     shapefile_self_intersecting,
     shapefile_path_traversal,

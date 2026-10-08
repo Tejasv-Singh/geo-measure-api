@@ -43,13 +43,24 @@ def check_measurable(crs: CRS) -> None:
 
 
 def crs_label(crs: CRS) -> str:
+    """A short label for responses: the authority code, or the CRS name when nothing matches."""
     authority = crs.to_authority()
-    return ":".join(authority) if authority else crs.to_wkt()
+    return ":".join(authority) if authority else crs.name
+
+
+def crs_wkt(crs: CRS) -> str:
+    return crs.to_wkt()
 
 
 def summarize_crs(crs_list: Iterable[CRS]) -> str | None:
-    """One label for a file: the shared CRS, or MIXED when layers differ."""
-    labels = {crs_label(crs) for crs in crs_list}
-    if len(labels) > 1:
+    """One label for a file: the shared CRS, or MIXED when layers differ.
+
+    Compares CRS objects rather than labels, since two different CRSs can share a name.
+    """
+    unique: list[CRS] = []
+    for crs in crs_list:
+        if not any(crs.equals(seen) for seen in unique):
+            unique.append(crs)
+    if len(unique) > 1:
         return MIXED
-    return labels.pop() if labels else None
+    return crs_label(unique[0]) if unique else None

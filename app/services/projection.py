@@ -1,3 +1,4 @@
+import math
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Sequence
@@ -72,16 +73,27 @@ class UTMStrategy(ProjectionStrategy):
 
 
 class LocalEqualAreaStrategy(ProjectionStrategy):
-    """Lambert Azimuthal Equal-Area centred on the feature's representative point."""
+    """Lambert Azimuthal Equal-Area centred near the feature's representative point.
+
+    LAEA preserves area everywhere, so the centre only affects shape. Snapping it to the middle
+    of the feature's 1 degree cell lets nearby features share one CRS and project together.
+    """
 
     method = "laea"
 
     def projection_for(self, geometry: BaseGeometry) -> Projection:
         point = geometry.representative_point()
-        definition = (
-            f"+proj=laea +lat_0={point.y:.6f} +lon_0={point.x:.6f} +datum=WGS84 +units=m +no_defs"
-        )
-        return Projection(crs=CRS.from_proj4(definition), label=definition, method=self.method)
+        return laea_projection(*laea_centre(point.x, point.y))
+
+
+def laea_centre(lon: float, lat: float) -> tuple[float, float]:
+    return min(math.floor(lon), 179) + 0.5, min(math.floor(lat), 89) + 0.5
+
+
+@lru_cache(maxsize=1024)
+def laea_projection(lon_0: float, lat_0: float) -> Projection:
+    definition = f"+proj=laea +lat_0={lat_0} +lon_0={lon_0} +datum=WGS84 +units=m +no_defs"
+    return Projection(crs=CRS.from_proj4(definition), label=definition, method="laea")
 
 
 def utm_epsg(lon: float, lat: float) -> int:

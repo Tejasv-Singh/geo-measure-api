@@ -177,8 +177,26 @@ def test_geometry_collection_gets_area_and_length(fixtures_dir: Path) -> None:
 
     assert (area.kind, length.kind) == (AREA, LENGTH)
     assert area.status is length.status is MeasurementStatus.OK
-    assert area.note == "Summed 1 polygon part(s) of a GeometryCollection. Ignored 1 point part(s)."
-    assert length.note == "Summed 1 line part(s) of a GeometryCollection. Ignored 1 point part(s)."
+    assert area.note == (
+        "Merged the polygon parts of a GeometryCollection into 1 polygon(s). "
+        "Ignored 1 point part(s)."
+    )
+    assert length.note == (
+        "Merged the line parts of a GeometryCollection into 1 line(s). Ignored 1 point part(s)."
+    )
+
+
+def test_overlapping_collection_parts_are_counted_once() -> None:
+    square = box(77.0, 28.0, 77.01, 28.01)
+    line = LineString([(77.0, 28.0), (77.01, 28.0)])
+
+    (square_alone,) = measure_one(square)
+    (line_alone,) = measure_one(line)
+    area, length = measure_one(GeometryCollection([square, square, line, line]))
+
+    assert square_alone.value is not None and line_alone.value is not None
+    assert area.value == pytest.approx(square_alone.value, rel=1e-9)
+    assert length.value == pytest.approx(line_alone.value, rel=1e-9)
 
 
 def test_self_intersecting_polygon_is_repaired_and_flagged(fixtures_dir: Path) -> None:
@@ -202,6 +220,17 @@ def test_polygon_with_nothing_left_after_repair() -> None:
     assert area.kind is AREA
     assert area.status is MeasurementStatus.INVALID_GEOMETRY
     assert area.value is None
+
+
+def test_line_with_nothing_left_after_repair() -> None:
+    (length,) = measure_one(LineString([(77, 28), (77, 28)]))
+
+    assert length.kind is LENGTH
+    assert length.status is MeasurementStatus.INVALID_GEOMETRY
+    assert length.value is None
+    assert length.note is not None
+    assert "No linear part is left" in length.note
+    assert "source CRS" not in length.note
 
 
 def test_coordinates_outside_lon_lat_are_unsupported_not_a_crash() -> None:
