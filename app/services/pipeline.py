@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import shapely
+from fastapi.encoders import jsonable_encoder
 from pyproj import CRS
 from shapely.geometry.base import BaseGeometry
 from sqlalchemy import insert, update
@@ -76,16 +77,19 @@ def run_file_job(
     storage: Storage,
     max_uncompressed_bytes: int,
 ) -> None:
-    """Process one stored file. It always ends COMPLETED or FAILED, never PROCESSING."""
+    """Process one stored file. It always ends COMPLETED or FAILED, never PROCESSING.
+
+    Safe to run more than once for the same file, as an at-least-once job queue would: only the
+    run that moves the file out of PENDING does any work.
+    """
     started = time.perf_counter()
     try:
         with session_factory() as session:
-            geo_file = session.get(GeoFile, file_id)
-            if geo_file is None:
-                logger.warning("File %s was deleted before processing started", file_id)
+            if not claim(session, file_id):
+                logger.info("File %s is not PENDING, so this run does nothing", file_id)
                 return
-            geo_file.status = FileStatus.PROCESSING
-            session.commit()
+            geo_file = session.get(GeoFile, file_id)
+            assert geo_file is not None
             path = storage.local_path(geo_file.storage_key)
             filename, requested_crs = geo_file.filename, geo_file.requested_crs
 
@@ -93,7 +97,7 @@ def run_file_job(
             processed = process_file(path, filename, max_uncompressed_bytes, requested_crs)
         except AppError as exc:
             logger.info("File %s could not be processed: %s", file_id, exc.message)
-            mark_failed(session_factory, file_id, exc.message, started)
+            mark_failed(session_factory, file_id, exc.code, exc.message, exc.details, started)
             return
 
         with session_factory() as session:
@@ -102,7 +106,18 @@ def run_file_job(
         logger.info("Processed file %s: %d features", file_id, processed.feature_count)
     except Exception:
         logger.exception("Unexpected error while processing file %s", file_id)
-        mark_failed(session_factory, file_id, GENERIC_FAILURE, started)
+        mark_failed(session_factory, file_id, "internal_error", GENERIC_FAILURE, None, started)
+
+
+def claim(session: Session, file_id: uuid.UUID) -> bool:
+    """Atomically move a PENDING file to PROCESSING. False if it was missing or not PENDING."""
+    result = session.execute(
+        update(GeoFile)
+        .where(GeoFile.id == file_id, GeoFile.status == FileStatus.PENDING)
+        .values(status=FileStatus.PROCESSING)
+    )
+    session.commit()
+    return rowcount(result) == 1
 
 
 def save_result(
@@ -130,7 +145,9 @@ def save_result(
     geo_file.layer_count = len(processed.layers)
     geo_file.feature_count = processed.feature_count
     geo_file.status = FileStatus.COMPLETED
+    geo_file.error_code = None
     geo_file.error_message = None
+    geo_file.error_details = None
     geo_file.processing_ms = processing_ms
     geo_file.processed_at = utcnow()
 
@@ -165,16 +182,24 @@ def insert_features(
 
 
 def mark_failed(
-    session_factory: sessionmaker[Session], file_id: uuid.UUID, message: str, started: float
+    session_factory: sessionmaker[Session],
+    file_id: uuid.UUID,
+    code: str,
+    message: str,
+    details: Any,
+    started: float,
 ) -> None:
     try:
         with session_factory() as session:
+            # Only the run that claimed the file may fail it.
             session.execute(
                 update(GeoFile)
-                .where(GeoFile.id == file_id)
+                .where(GeoFile.id == file_id, GeoFile.status == FileStatus.PROCESSING)
                 .values(
                     status=FileStatus.FAILED,
+                    error_code=code,
                     error_message=message,
+                    error_details=jsonable_encoder(details),
                     processing_ms=elapsed_ms(started),
                     processed_at=utcnow(),
                 )
@@ -190,9 +215,19 @@ def fail_interrupted(session: Session) -> int:
     result = session.execute(
         update(GeoFile)
         .where(GeoFile.status.in_(UNFINISHED))
-        .values(status=FileStatus.FAILED, error_message=INTERRUPTED, processed_at=utcnow())
+        .values(
+            status=FileStatus.FAILED,
+            error_code="interrupted",
+            error_message=INTERRUPTED,
+            processed_at=utcnow(),
+        )
     )
     session.commit()
+    return rowcount(result)
+
+
+def rowcount(result: object) -> int:
+    # Session.execute is typed as returning Result, but UPDATE gives a CursorResult.
     return int(getattr(result, "rowcount", 0) or 0)
 
 

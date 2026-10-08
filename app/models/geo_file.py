@@ -1,11 +1,11 @@
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, Enum, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, utcnow
+from app.models.base import Base, JSONType, utcnow
 from app.models.enums import FileStatus
 
 if TYPE_CHECKING:
@@ -21,7 +21,9 @@ class GeoFile(Base):
     status: Mapped[FileStatus] = mapped_column(
         Enum(FileStatus, native_enum=False, length=20), default=FileStatus.PENDING, index=True
     )
+    error_code: Mapped[str | None] = mapped_column(String(50))
     error_message: Mapped[str | None] = mapped_column(Text)
+    error_details: Mapped[Any] = mapped_column(JSONType, nullable=True)
     # The source_crs form field, used for layers that carry no CRS of their own.
     requested_crs: Mapped[str | None] = mapped_column(Text)
     source_crs: Mapped[str | None] = mapped_column(String(255))

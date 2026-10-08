@@ -143,6 +143,7 @@ def shapefile_kalianpur(out: Path) -> Path:
     frame = gpd.GeoDataFrame(
         {"name": ["Survey line"]},
         geometry=[LineString([(2_743_195, 914_398), (2_744_195, 914_398)])],
+        crs="EPSG:24381",
     )
     zone = write_shapefile_parts(frame, "zone")
     zone["zone.prj"] = KALIANPUR_IIIA_2SP.encode("ascii")

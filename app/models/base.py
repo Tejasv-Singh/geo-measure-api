@@ -14,7 +14,8 @@ NAMING_CONVENTION = {
     "pk": "pk_%(table_name)s",
 }
 
-JSONType = JSON().with_variant(JSONB(), "postgresql")
+# none_as_null stores Python None as SQL NULL rather than the JSON literal null.
+JSONType = JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
 
 
 class Base(DeclarativeBase):

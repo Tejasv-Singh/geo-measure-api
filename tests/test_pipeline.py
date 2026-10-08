@@ -129,11 +129,59 @@ def test_missing_prj_without_source_crs_fails_with_a_clear_message(
     geo_file = process(session_factory, storage, fixtures_dir / "shapefile_no_prj.zip")
 
     assert geo_file.status is FileStatus.FAILED
+    assert geo_file.error_code == "missing_crs"
+    assert geo_file.error_details == {"layer": "parcels"}
     assert geo_file.error_message is not None
     assert "no .prj file" in geo_file.error_message
     assert "source_crs" in geo_file.error_message
     assert geo_file.processing_ms is not None and geo_file.processed_at is not None
     assert layers_of(session_factory, geo_file.id) == []
+
+
+def test_missing_dbf_keeps_the_missing_sidecars_in_details(
+    session_factory: sessionmaker[Session], storage: LocalStorage, fixtures_dir: Path
+) -> None:
+    geo_file = process(session_factory, storage, fixtures_dir / "shapefile_missing_dbf.zip")
+
+    assert geo_file.status is FileStatus.FAILED
+    assert geo_file.error_code == "invalid_file"
+    assert geo_file.error_details == {"missing": {"parcels.shp": [".dbf"]}}
+
+
+def test_running_the_job_twice_leaves_one_completed_result(
+    session_factory: sessionmaker[Session], storage: LocalStorage, fixtures_dir: Path
+) -> None:
+    file_id = upload(session_factory, storage, fixtures_dir / "golden_square.kml")
+
+    run_file_job(file_id, session_factory, storage, LIMIT)
+    run_file_job(file_id, session_factory, storage, LIMIT)
+
+    with session_factory() as session:
+        geo_file = session.get(GeoFile, file_id)
+        assert geo_file is not None
+        assert geo_file.status is FileStatus.COMPLETED
+        assert geo_file.error_code is None
+    assert len(layers_of(session_factory, file_id)) == 1
+    assert len(features_of(session_factory, file_id)) == 1
+    assert len(measurements_of(session_factory, file_id)) == 1
+
+
+def test_job_does_not_touch_a_file_another_run_has_claimed(
+    session_factory: sessionmaker[Session], storage: LocalStorage, fixtures_dir: Path
+) -> None:
+    file_id = upload(session_factory, storage, fixtures_dir / "golden_square.kml")
+    with session_factory() as session:
+        geo_file = session.get(GeoFile, file_id)
+        assert geo_file is not None
+        geo_file.status = FileStatus.PROCESSING
+        session.commit()
+
+    run_file_job(file_id, session_factory, storage, LIMIT)
+
+    with session_factory() as session:
+        geo_file = session.get(GeoFile, file_id)
+        assert geo_file is not None and geo_file.status is FileStatus.PROCESSING
+    assert layers_of(session_factory, file_id) == []
 
 
 def test_missing_prj_with_source_crs_is_measured(
@@ -158,6 +206,7 @@ def test_invalid_source_crs_fails_the_file(
     geo_file = process(session_factory, storage, fixtures_dir / "shapefile_no_prj.zip", "nope")
 
     assert geo_file.status is FileStatus.FAILED
+    assert geo_file.error_code == "invalid_crs"
     assert geo_file.error_message == "'nope' is not a valid CRS."
 
 
@@ -215,7 +264,9 @@ def test_unexpected_error_fails_with_a_generic_message(
     geo_file = process(session_factory, storage, fixtures_dir / "golden_square.kml")
 
     assert geo_file.status is FileStatus.FAILED
+    assert geo_file.error_code == "internal_error"
     assert geo_file.error_message == GENERIC_FAILURE
+    assert geo_file.error_details is None
     assert geo_file.processing_ms is not None and geo_file.processed_at is not None
     assert "secret internal detail" in caplog.text
 
@@ -267,6 +318,7 @@ def test_startup_fails_files_left_unfinished(
             geo_file = session.get(GeoFile, file_id)
             assert geo_file is not None
             assert geo_file.status is FileStatus.FAILED
+            assert geo_file.error_code == "interrupted"
             assert geo_file.error_message == INTERRUPTED
         completed = session.get(GeoFile, done)
         assert completed is not None and completed.status is FileStatus.COMPLETED
