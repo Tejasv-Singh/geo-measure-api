@@ -1,8 +1,10 @@
 FROM python:3.12-slim
 
+# PYTHONPATH makes /app/app win over the installed copy, so app/db.py finds alembic.ini beside it.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app
 
 WORKDIR /app
 
@@ -10,6 +12,8 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY app ./app
 RUN pip install ".[postgres]"
+COPY alembic.ini ./
+COPY migrations ./migrations
 
 # Compose mounts a volume at /app/data/uploads; it must exist here or Docker creates it root-owned.
 RUN useradd --create-home appuser \

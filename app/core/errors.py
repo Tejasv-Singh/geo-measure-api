@@ -38,6 +38,11 @@ class InvalidFileError(AppError):
     code = "invalid_file"
 
 
+class FileTooLargeError(AppError):
+    status_code = status.HTTP_413_CONTENT_TOO_LARGE
+    code = "file_too_large"
+
+
 class MissingCRSError(InvalidFileError):
     code = "missing_crs"
 

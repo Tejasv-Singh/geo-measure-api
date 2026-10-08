@@ -7,7 +7,6 @@ feature's UTM zone. Z values are ignored, so every value is planimetric.
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 
 import geopandas as gpd
 import shapely
@@ -16,6 +15,7 @@ from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry, BaseMultipartGeometry
 from shapely.geometry.polygon import orient
 
+from app.models.enums import MeasurementKind, MeasurementStatus
 from app.services.crs import WGS84
 from app.services.projection import LocalEqualAreaStrategy, ProjectionStrategy, UTMStrategy
 from app.services.readers import FeatureRecord, LayerRecord
@@ -26,20 +26,6 @@ PUNTAL = frozenset({"Point", "MultiPoint"})
 COLLECTION = "GeometryCollection"
 
 GEOD = Geod(ellps="WGS84")
-
-
-class MeasurementKind(StrEnum):
-    AREA = "AREA"
-    LENGTH = "LENGTH"
-    NONE = "NONE"
-
-
-class MeasurementStatus(StrEnum):
-    OK = "OK"
-    NOT_APPLICABLE = "NOT_APPLICABLE"
-    UNSUPPORTED = "UNSUPPORTED"
-    INVALID_GEOMETRY = "INVALID_GEOMETRY"
-    EMPTY = "EMPTY"
 
 
 UNITS = {MeasurementKind.AREA: "m2", MeasurementKind.LENGTH: "m"}

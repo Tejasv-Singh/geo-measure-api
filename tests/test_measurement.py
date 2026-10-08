@@ -16,11 +16,10 @@ from shapely.geometry import (
 )
 from shapely.geometry.base import BaseGeometry
 
+from app.models.enums import MeasurementKind, MeasurementStatus
 from app.services.crs import WGS84
 from app.services.measurement import (
     Measurement,
-    MeasurementKind,
-    MeasurementStatus,
     measure_layer,
 )
 from app.services.readers import FeatureRecord, LayerRecord, reader_for
