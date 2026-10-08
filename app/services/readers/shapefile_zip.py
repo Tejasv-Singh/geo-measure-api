@@ -3,7 +3,7 @@ from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
 
 from app.core.errors import InvalidFileError
-from app.services.readers.base import BaseReader, RawLayer, read_frame
+from app.services.readers.base import BaseReader, RawLayer
 from app.services.readers.zip_safety import safe_member_names
 
 REQUIRED_SIDECARS = (".shx", ".dbf")
@@ -17,9 +17,13 @@ class ShapefileZipReader(BaseReader):
         names = safe_member_names(path, self.max_uncompressed_bytes)
         shapefiles = find_shapefiles(names)
         archive = path.resolve().as_posix()
+        lowered = {name.lower() for name in names}
         for shp, layer_name in zip(shapefiles, layer_names(shapefiles), strict=True):
             # GDAL reads straight from the archive, and picks up the .prj and .cpg beside the .shp.
-            frame = read_frame(f"/vsizip/{archive}/{shp}")
+            frame = self.read_frame(path, f"/vsizip/{archive}/{shp}")
+            # GDAL returns no CRS both for a missing .prj and for one it cannot parse.
+            if frame.crs is None and _sidecar(shp, ".prj").lower() in lowered:
+                raise InvalidFileError("The .prj file could not be parsed.", {"layer": layer_name})
             yield RawLayer(name=layer_name, frame=frame, crs=frame.crs)
 
 

@@ -1,4 +1,6 @@
 import json
+import logging
+import shutil
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,14 @@ LIMIT = 50 * 1024 * 1024
 
 def read(path: Path) -> ReadResult:
     return reader_for(path.name, max_uncompressed_bytes=LIMIT).read(path)
+
+
+def stored_copy(fixture: Path, tmp_path: Path) -> Path:
+    """Copy a fixture to an opaque name, the way uploads are stored."""
+    stored = tmp_path / "storage" / f"0b9f3c2e{fixture.suffix}"
+    stored.parent.mkdir()
+    shutil.copyfile(fixture, stored)
+    return stored
 
 
 def test_registry_picks_reader_by_extension() -> None:
@@ -55,6 +65,18 @@ def test_shapefile_without_prj_has_no_crs(fixtures_dir: Path) -> None:
     assert result.layers[0].crs is None
 
 
+def test_shapefile_with_unparseable_prj_is_rejected(fixtures_dir: Path) -> None:
+    with pytest.raises(InvalidFileError, match=r"The \.prj file could not be parsed\."):
+        read(fixtures_dir / "shapefile_bad_prj.zip")
+
+
+def test_shapefile_with_corrupt_dbf_keeps_features_without_properties(fixtures_dir: Path) -> None:
+    result = read(fixtures_dir / "shapefile_corrupt_dbf.zip")
+
+    assert [f.properties for f in result.features] == [{}, {}]
+    assert [f.geometry_type for f in result.features] == ["Polygon", "Polygon"]
+
+
 def test_shapefile_respects_cpg_encoding(fixtures_dir: Path) -> None:
     result = read(fixtures_dir / "shapefile_cp1251.zip")
 
@@ -85,7 +107,7 @@ def test_bad_shapefile_archives_are_rejected(
 
 
 def test_zip_over_uncompressed_cap_is_rejected(fixtures_dir: Path) -> None:
-    reader = ShapefileZipReader(max_uncompressed_bytes=100)
+    reader = ShapefileZipReader(filename="parcels.zip", max_uncompressed_bytes=100)
 
     with pytest.raises(InvalidFileError, match="too large"):
         reader.read(fixtures_dir / "shapefile_two_layers.zip")
@@ -102,6 +124,20 @@ def test_kml_keeps_name_description_and_extended_data(fixtures_dir: Path) -> Non
         "owner": "Asha",
         "plot_no": "42",
     }
+
+
+def test_kml_keeps_placemark_id_and_times_but_drops_empty_boilerplate(
+    fixtures_dir: Path,
+) -> None:
+    plot, line = read(fixtures_dir / "ids_and_times.kml").features
+
+    assert plot.properties["id"] == "plot-17"
+    assert plot.properties["timestamp"] == "2024-03-01T10:30:00+00:00"
+    assert line.properties["id"] is None
+    assert line.properties["begin"] == "2023-01-01T00:00:00"
+    assert line.properties["end"] == "2023-12-31T00:00:00"
+    dropped = {"tessellate", "extrude", "visibility", "drawOrder", "icon", "altitudeMode"}
+    assert dropped.isdisjoint(plot.properties)
 
 
 def test_kml_reads_each_folder_as_a_layer(fixtures_dir: Path) -> None:
@@ -132,3 +168,39 @@ def test_kmz_is_read(fixtures_dir: Path) -> None:
 
     assert result.format == "kml"
     assert [f.geometry_type for f in result.features] == ["Polygon"]
+
+
+@pytest.mark.parametrize(
+    ("fixture", "upload_name", "visible_path"),
+    [
+        ("shapefile_corrupt_shp.zip", "My Parcels.zip", "My Parcels.zip/data/parcels.shp"),
+        ("not_xml.kml", "survey.kml", "survey.kml"),
+    ],
+)
+def test_gdal_errors_name_the_upload_not_the_stored_path(
+    fixtures_dir: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    fixture: str,
+    upload_name: str,
+    visible_path: str,
+) -> None:
+    stored = stored_copy(fixtures_dir / fixture, tmp_path)
+    reader = reader_for(upload_name, max_uncompressed_bytes=LIMIT)
+
+    with caplog.at_level(logging.WARNING), pytest.raises(InvalidFileError) as exc_info:
+        reader.read(stored)
+
+    message = exc_info.value.message
+    assert visible_path in message
+    assert stored.name not in message
+    assert str(tmp_path) not in message and tmp_path.as_posix() not in message
+    assert stored.name in caplog.text
+
+
+def test_missing_layer_is_an_invalid_file(fixtures_dir: Path) -> None:
+    path = fixtures_dir / "multi_folder.kml"
+    reader = KMLReader(filename=path.name, max_uncompressed_bytes=LIMIT)
+
+    with pytest.raises(InvalidFileError, match="Layer 'Lakes' could not be opened"):
+        reader.read_frame(path, path, layer="Lakes")

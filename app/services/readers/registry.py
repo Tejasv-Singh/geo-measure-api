@@ -24,4 +24,4 @@ def reader_for(filename: str, max_uncompressed_bytes: int) -> BaseReader:
             f"Unsupported file extension '{extension}'.",
             {"supported": supported_extensions()},
         )
-    return reader(max_uncompressed_bytes=max_uncompressed_bytes)
+    return reader(filename=filename, max_uncompressed_bytes=max_uncompressed_bytes)

@@ -96,6 +96,24 @@ def shapefile_missing_dbf(out: Path) -> Path:
     return write_zip(out / "shapefile_missing_dbf.zip", in_folder("", parts, skip=(".dbf",)))
 
 
+def shapefile_corrupt_dbf(out: Path) -> Path:
+    parts = write_shapefile_parts(parcels_frame(), "parcels")
+    parts["parcels.dbf"] = bytes(40)
+    return write_zip(out / "shapefile_corrupt_dbf.zip", in_folder("", parts))
+
+
+def shapefile_bad_prj(out: Path) -> Path:
+    parts = write_shapefile_parts(parcels_frame(), "parcels")
+    parts["parcels.prj"] = b"this is not a projection"
+    return write_zip(out / "shapefile_bad_prj.zip", in_folder("", parts))
+
+
+def shapefile_corrupt_shp(out: Path) -> Path:
+    parts = write_shapefile_parts(parcels_frame(), "parcels")
+    parts["parcels.shp"] = bytes(10)
+    return write_zip(out / "shapefile_corrupt_shp.zip", in_folder("data", parts))
+
+
 def shapefile_cp1251(out: Path) -> Path:
     frame = gpd.GeoDataFrame(
         {"city": ["Москва"]}, geometry=[square(500_000, 3_100_000, 10)], crs=UTM_43N
@@ -158,6 +176,8 @@ def kml_placemark(
     geometry_xml: str,
     data: dict[str, str] | None = None,
     description: str | None = None,
+    placemark_id: str | None = None,
+    time_xml: str = "",
 ) -> str:
     extended = ""
     if data:
@@ -167,7 +187,9 @@ def kml_placemark(
         )
         extended = f"<ExtendedData>{fields}</ExtendedData>"
     desc = f"<description>{escape(description)}</description>" if description else ""
-    return f"<Placemark><name>{escape(name)}</name>{desc}{extended}{geometry_xml}</Placemark>"
+    opening = f'<Placemark id="{escape(placemark_id)}">' if placemark_id else "<Placemark>"
+    body = f"<name>{escape(name)}</name>{desc}{time_xml}{extended}{geometry_xml}"
+    return f"{opening}{body}</Placemark>"
 
 
 def kml_document(folders: dict[str, list[str]]) -> str:
@@ -191,6 +213,25 @@ def kml_extended_data(out: Path) -> Path:
     )
     path = out / "extended_data.kml"
     path.write_text(kml_document({"Plots": [placemark]}), encoding="utf-8")
+    return path
+
+
+def kml_ids_and_times(out: Path) -> Path:
+    placemarks = [
+        kml_placemark(
+            "Plot 17",
+            kml_geometry(square(77.0, 28.0, 0.01)),
+            placemark_id="plot-17",
+            time_xml="<TimeStamp><when>2024-03-01T10:30:00Z</when></TimeStamp>",
+        ),
+        kml_placemark(
+            "Survey line",
+            kml_geometry(LineString([(77.0, 28.0), (77.02, 28.0)])),
+            time_xml="<TimeSpan><begin>2023-01-01</begin><end>2023-12-31</end></TimeSpan>",
+        ),
+    ]
+    path = out / "ids_and_times.kml"
+    path.write_text(kml_document({"Plots": placemarks}), encoding="utf-8")
     return path
 
 
@@ -228,6 +269,12 @@ def kml_3d(out: Path) -> Path:
     return path
 
 
+def kml_not_xml(out: Path) -> Path:
+    path = out / "not_xml.kml"
+    path.write_text("this is plain text", encoding="utf-8")
+    return path
+
+
 def kmz_sample(out: Path) -> Path:
     document = kml_document(
         {"Parcels": [kml_placemark("P1", kml_geometry(square(77.0, 28.0, 0.01)))]}
@@ -239,15 +286,20 @@ GENERATORS: tuple[Callable[[Path], Path], ...] = (
     shapefile_two_layers,
     shapefile_no_prj,
     shapefile_missing_dbf,
+    shapefile_corrupt_dbf,
+    shapefile_bad_prj,
+    shapefile_corrupt_shp,
     shapefile_cp1251,
     shapefile_self_intersecting,
     shapefile_path_traversal,
     empty_zip,
     not_a_zip,
     kml_extended_data,
+    kml_ids_and_times,
     kml_multi_folder,
     kml_geometry_collection,
     kml_3d,
+    kml_not_xml,
     kmz_sample,
 )
 

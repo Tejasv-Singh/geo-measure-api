@@ -1,3 +1,4 @@
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -5,12 +6,16 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import geopandas as gpd
-from pyogrio.errors import DataSourceError
+from pyogrio.errors import DataLayerError, DataSourceError
 from pyproj import CRS
 from shapely.geometry.base import BaseGeometry
 
 from app.core.errors import InvalidFileError
 from app.services.json_safe import JSONValue, to_json_safe
+
+logger = logging.getLogger(__name__)
+
+GDAL_ERRORS = (DataSourceError, DataLayerError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +56,8 @@ class BaseReader(ABC):
     format: ClassVar[str]
     extensions: ClassVar[tuple[str, ...]]
 
-    def __init__(self, max_uncompressed_bytes: int) -> None:
+    def __init__(self, filename: str, max_uncompressed_bytes: int) -> None:
+        self.filename = filename
         self.max_uncompressed_bytes = max_uncompressed_bytes
 
     def read(self, path: Path) -> ReadResult:
@@ -66,26 +72,50 @@ class BaseReader(ABC):
     @abstractmethod
     def read_layers(self, path: Path) -> Iterator[RawLayer]: ...
 
+    def read_frame(
+        self, path: Path, source: str | Path, layer: str | None = None
+    ) -> gpd.GeoDataFrame:
+        try:
+            return gpd.read_file(
+                source,
+                layer=layer,
+                engine="pyogrio",
+                force_2d=True,
+                on_invalid="fix",
+            )
+        except GDAL_ERRORS as exc:
+            raise self.gdal_error(exc, path, "GDAL could not read the data") from exc
 
-def read_frame(source: str | Path, layer: str | None = None) -> gpd.GeoDataFrame:
-    try:
-        return gpd.read_file(
-            source,
-            layer=layer,
-            engine="pyogrio",
-            force_2d=True,
-            on_invalid="fix",
-        )
-    except DataSourceError as exc:
-        raise InvalidFileError(f"GDAL could not read the data: {exc}") from exc
+    def gdal_error(self, exc: Exception, path: Path, prefix: str) -> InvalidFileError:
+        """Log the full GDAL message; return one naming the upload instead of its stored path."""
+        message = str(exc)
+        logger.warning("GDAL failed on %s stored at %s: %s", self.filename, path, message)
+        return InvalidFileError(f"{prefix}: {redact_path(message, path, self.filename)}")
+
+
+def redact_path(message: str, path: Path, filename: str) -> str:
+    resolved = path.resolve()
+    variants = {
+        f"/vsizip/{resolved.as_posix()}",
+        f"/vsizip/{path.as_posix()}",
+        str(resolved),
+        resolved.as_posix(),
+        str(path),
+        path.as_posix(),
+    }
+    for variant in sorted(variants, key=len, reverse=True):
+        message = message.replace(variant, filename)
+    return message
 
 
 def to_feature_records(raw: RawLayer, start_index: int) -> list[FeatureRecord]:
     frame = raw.frame
-    attributes = frame.drop(columns=frame.geometry.name).to_dict("records")
+    attributes = frame.drop(columns=frame.geometry.name)
+    # to_dict("records") returns [] for a frame with rows but no columns.
+    rows = attributes.to_dict("records") if len(attributes.columns) else [{}] * len(frame)
     return [
         _to_feature_record(raw.name, start_index + offset, geometry, row)
-        for offset, (geometry, row) in enumerate(zip(frame.geometry, attributes, strict=True))
+        for offset, (geometry, row) in enumerate(zip(frame.geometry, rows, strict=True))
     ]
 
 
