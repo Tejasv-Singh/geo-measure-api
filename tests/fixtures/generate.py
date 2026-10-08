@@ -22,6 +22,10 @@ from shapely.geometry import (
 from shapely.geometry.base import BaseGeometry
 
 UTM_43N = "EPSG:32643"
+# About 180 km east of the zone 43N central meridian, where the UTM scale factor is close to 1,
+# so a 1 km grid square is also 1 km2 on the ground. At the central meridian it is 0.9996.
+GOLDEN_EASTING = 680_000
+GOLDEN_NORTHING = 3_100_000
 SHAPEFILE_PARTS = (".shp", ".shx", ".dbf", ".prj", ".cpg")
 
 
@@ -275,6 +279,20 @@ def kml_not_xml(out: Path) -> Path:
     return path
 
 
+def golden_square_wgs84() -> Polygon:
+    square_utm = gpd.GeoSeries([square(GOLDEN_EASTING, GOLDEN_NORTHING, 1000)], crs=UTM_43N)
+    polygon = square_utm.to_crs("EPSG:4326").iloc[0]
+    assert isinstance(polygon, Polygon)
+    return polygon
+
+
+def kml_golden_square(out: Path) -> Path:
+    placemark = kml_placemark("1 km square", kml_geometry(golden_square_wgs84()))
+    path = out / "golden_square.kml"
+    path.write_text(kml_document({"Golden": [placemark]}), encoding="utf-8")
+    return path
+
+
 def kmz_sample(out: Path) -> Path:
     document = kml_document(
         {"Parcels": [kml_placemark("P1", kml_geometry(square(77.0, 28.0, 0.01)))]}
@@ -300,6 +318,7 @@ GENERATORS: tuple[Callable[[Path], Path], ...] = (
     kml_geometry_collection,
     kml_3d,
     kml_not_xml,
+    kml_golden_square,
     kmz_sample,
 )
 

@@ -38,6 +38,15 @@ class InvalidFileError(AppError):
     code = "invalid_file"
 
 
+class MissingCRSError(InvalidFileError):
+    code = "missing_crs"
+
+
+class InvalidCRSError(AppError):
+    status_code = 422
+    code = "invalid_crs"
+
+
 def error_body(code: str, message: str, details: Any = None) -> dict[str, Any]:
     return {"error": {"code": code, "message": message, "details": details}}
 
