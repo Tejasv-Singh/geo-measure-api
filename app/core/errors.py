@@ -28,6 +28,16 @@ class NotFoundError(AppError):
     code = "not_found"
 
 
+class UnsupportedFileError(AppError):
+    status_code = status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
+    code = "unsupported_file"
+
+
+class InvalidFileError(AppError):
+    status_code = 422
+    code = "invalid_file"
+
+
 def error_body(code: str, message: str, details: Any = None) -> dict[str, Any]:
     return {"error": {"code": code, "message": message, "details": details}}
 
