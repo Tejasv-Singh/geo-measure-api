@@ -59,13 +59,25 @@ def test_file_at_exactly_the_limit_is_accepted(tmp_path: Path) -> None:
     assert storage.save(io.BytesIO(bytes(128)), ".kml").size_bytes == 128
 
 
-@pytest.mark.parametrize("key", ["../x.zip", "a/b.zip", "..\\x.zip"])
-def test_local_path_rejects_keys_with_directories(tmp_path: Path, key: str) -> None:
+@pytest.mark.parametrize(
+    "key",
+    [
+        "../x.zip",
+        "a/b.zip",
+        "..\\x.zip",
+        "..",
+        "x.zip",
+        "0" * 32 + ".zip/../y",
+        "0" * 32 + ".zip\n",
+        "A" * 32 + ".zip",
+    ],
+)
+def test_local_path_rejects_keys_it_did_not_generate(tmp_path: Path, key: str) -> None:
     with pytest.raises(ValueError, match="Invalid storage key"):
         make_storage(tmp_path).local_path(key)
 
 
-@pytest.mark.parametrize("suffix", ["", "zip", ".zi/p", "/../x"])
+@pytest.mark.parametrize("suffix", ["", "zip", ".zi/p", "/../x", ".zip\n"])
 def test_save_rejects_odd_suffixes(tmp_path: Path, suffix: str) -> None:
     with pytest.raises(ValueError, match="Invalid file suffix"):
         make_storage(tmp_path).save(io.BytesIO(b"x"), suffix)

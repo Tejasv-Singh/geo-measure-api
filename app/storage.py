@@ -9,7 +9,9 @@ from typing import BinaryIO
 from app.core.errors import FileTooLargeError
 
 CHUNK_BYTES = 1024 * 1024
-_SUFFIX = re.compile(r"^\.[a-z0-9]{1,10}$")
+_SUFFIX = re.compile(r"\.[a-z0-9]{1,10}")
+# Exactly what save() generates, so a key can never name a path outside the root on any OS.
+_KEY = re.compile(r"[0-9a-f]{32}\.[a-z0-9]{1,10}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +46,7 @@ class LocalStorage(Storage):
     def save(self, source: BinaryIO, suffix: str) -> StoredFile:
         """Copy in chunks, enforcing the size cap and hashing in the same pass."""
         suffix = suffix.lower()
-        if not _SUFFIX.match(suffix):
+        if not _SUFFIX.fullmatch(suffix):
             raise ValueError(f"Invalid file suffix {suffix!r}")
         key = f"{uuid.uuid4().hex}{suffix}"
         target = self.local_path(key)
@@ -67,7 +69,7 @@ class LocalStorage(Storage):
         return StoredFile(key=key, size_bytes=size, sha256=digest.hexdigest())
 
     def local_path(self, key: str) -> Path:
-        if Path(key).name != key:
+        if not _KEY.fullmatch(key):
             raise ValueError(f"Invalid storage key {key!r}")
         return self.root / key
 
