@@ -494,3 +494,57 @@ def test_other_routes_are_not_size_limited(small_client: TestClient) -> None:
     response = small_client.post("/health", content=bytes(MULTIPART_OVERHEAD_BYTES + 5000))
 
     assert response.status_code == 405
+
+
+@pytest.mark.parametrize(
+    ("fixture", "message", "details"),
+    [
+        (
+            "shapefile_missing_dbf.zip",
+            "matching .shx and .dbf",
+            {"missing": {"parcels.shp": [".dbf"]}},
+        ),
+        ("shapefile_path_traversal.zip", "unsafe file paths", {"entries": ["../../evil.txt"]}),
+        ("shapefile_encrypted.zip", "Encrypted zip archives", None),
+        ("no_kml.kmz", "does not contain a .kml", None),
+    ],
+)
+def test_bad_archives_are_rejected_at_upload(
+    client: TestClient,
+    settings: Settings,
+    fixtures_dir: Path,
+    fixture: str,
+    message: str,
+    details: Any,
+) -> None:
+    response = upload(client, fixtures_dir / fixture)
+
+    assert response.status_code == 422
+    assert error(response)["code"] == "invalid_file"
+    assert message in error(response)["message"]
+    assert error(response)["details"] == details
+    assert stored_files(settings) == []
+    assert client.get("/api/files/").json()["total"] == 0
+
+
+def test_archive_over_the_uncompressed_cap_is_rejected_at_upload(
+    settings: Settings, fixtures_dir: Path
+) -> None:
+    tight = settings.model_copy(update={"max_uncompressed_bytes": 100})
+    with TestClient(create_app(tight)) as client:
+        response = upload(client, fixtures_dir / "shapefile_two_layers.zip")
+
+    assert response.status_code == 422
+    assert error(response)["details"]["limit_bytes"] == 100
+    assert stored_files(tight) == []
+
+
+def test_too_many_features_fails_the_file(settings: Settings, fixtures_dir: Path) -> None:
+    capped = settings.model_copy(update={"max_features": 2})
+    with TestClient(create_app(capped)) as client:
+        file_id = upload_ok(client, fixtures_dir / "shapefile_two_layers.zip")
+        info = client.get(f"/api/files/{file_id}/").json()
+
+    assert info["status"] == "FAILED"
+    assert info["error_code"] == "too_many_features"
+    assert info["error_details"] == {"feature_count": 3, "limit": 2}

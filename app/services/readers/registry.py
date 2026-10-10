@@ -1,7 +1,7 @@
 from pathlib import PurePath
 
 from app.core.errors import UnsupportedFileError
-from app.services.readers.base import BaseReader
+from app.services.readers.base import BaseReader, ReadLimits
 from app.services.readers.kml import KMLReader
 from app.services.readers.shapefile_zip import ShapefileZipReader
 
@@ -16,7 +16,7 @@ def supported_extensions() -> list[str]:
     return sorted(_READERS)
 
 
-def reader_for(filename: str, max_uncompressed_bytes: int) -> BaseReader:
+def reader_for(filename: str, limits: ReadLimits) -> BaseReader:
     extension = PurePath(filename).suffix.lower()
     reader = _READERS.get(extension)
     if reader is None:
@@ -24,4 +24,4 @@ def reader_for(filename: str, max_uncompressed_bytes: int) -> BaseReader:
             f"Unsupported file extension '{extension}'.",
             {"supported": supported_extensions()},
         )
-    return reader(filename=filename, max_uncompressed_bytes=max_uncompressed_bytes)
+    return reader(filename=filename, limits=limits)

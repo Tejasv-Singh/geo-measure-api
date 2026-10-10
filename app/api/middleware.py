@@ -1,14 +1,21 @@
-"""Reject oversized uploads before Starlette spools them to disk.
+"""ASGI middleware for request IDs and upload size.
 
 Starlette parses the whole multipart body into a temporary file before the route runs, so the
-limit in Storage.save comes too late to protect the disk. This middleware checks Content-Length
-up front and counts bytes for bodies sent without one.
+limit in Storage.save comes too late to protect the disk. UploadSizeLimitMiddleware checks
+Content-Length up front and counts bytes for bodies sent without one.
 """
 
+import logging
+import time
+
+from starlette.datastructures import MutableHeaders
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.errors import FileTooLargeError, error_body
+from app.core.logging import clean_request_id, request_id_var
+
+logger = logging.getLogger("app.requests")
 
 # Room for multipart boundaries, part headers and the source_crs field around the file itself.
 MULTIPART_OVERHEAD_BYTES = 64 * 1024
@@ -26,8 +33,8 @@ class UploadSizeLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        declared = content_length(scope)
-        if declared is not None and declared > self.max_body_bytes:
+        declared = header(scope, b"content-length")
+        if declared is not None and declared.isdigit() and int(declared) > self.max_body_bytes:
             await self.reject(scope, receive, send)
             return
 
@@ -68,11 +75,43 @@ class UploadSizeLimitMiddleware:
         await response(scope, receive, send)
 
 
-def content_length(scope: Scope) -> int | None:
-    for name, value in scope["headers"]:
-        if name == b"content-length":
-            try:
-                return int(value)
-            except ValueError:
-                return None
+class RequestIDMiddleware:
+    """Tag each request with an ID: the client's X-Request-ID if it is safe, else a new one.
+
+    The ID goes on the response header and on every log line written while handling the request.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request_id = clean_request_id(header(scope, b"x-request-id"))
+        # Not reset afterwards: each request runs in its own task with a copied context, and
+        # Starlette writes the server-error log line after this middleware has returned.
+        request_id_var.set(request_id)
+        started = time.perf_counter()
+        status_code = 500
+
+        async def send_with_id(message: Message) -> None:
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+                MutableHeaders(scope=message).append("X-Request-ID", request_id)
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_with_id)
+        finally:
+            elapsed = (time.perf_counter() - started) * 1000
+            logger.info("%s %s %s %.0fms", scope["method"], scope["path"], status_code, elapsed)
+
+
+def header(scope: Scope, name: bytes) -> str | None:
+    for key, value in scope["headers"]:
+        if key == name:
+            return str(value.decode("latin-1"))
     return None

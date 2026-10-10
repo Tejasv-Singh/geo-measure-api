@@ -12,7 +12,7 @@ from app.services.crs import (
     resolve_layer_crs,
     summarize_crs,
 )
-from app.services.readers import reader_for
+from app.services.readers import ReadLimits, reader_for
 
 UTM_43N = CRS.from_epsg(32643)
 ESRI_UTM_43N = (
@@ -50,7 +50,7 @@ def test_fallback_is_used_when_layer_has_no_crs() -> None:
 
 def test_shapefile_without_prj_and_without_fallback_fails(fixtures_dir: Path) -> None:
     path = fixtures_dir / "shapefile_no_prj.zip"
-    (layer,) = reader_for(path.name, max_uncompressed_bytes=10**8).read(path).layers
+    (layer,) = reader_for(path.name, ReadLimits(10**8)).read(path).layers
 
     with pytest.raises(MissingCRSError, match="source_crs") as exc_info:
         resolve_layer_crs(layer.name, layer.crs, None)
@@ -64,7 +64,7 @@ def test_crs_label_prefers_authority_code() -> None:
 
 def test_esri_prj_without_authority_is_labelled_by_name(fixtures_dir: Path) -> None:
     path = fixtures_dir / "shapefile_kalianpur.zip"
-    zone = reader_for(path.name, max_uncompressed_bytes=10**8).read(path).layers[1]
+    zone = reader_for(path.name, ReadLimits(10**8)).read(path).layers[1]
     assert zone.name == "zone" and zone.crs is not None
 
     assert zone.crs.to_authority() is None
@@ -75,7 +75,7 @@ def test_esri_prj_without_authority_is_labelled_by_name(fixtures_dir: Path) -> N
 
 def test_different_crs_with_the_same_name_are_mixed(fixtures_dir: Path) -> None:
     path = fixtures_dir / "shapefile_kalianpur.zip"
-    layers = reader_for(path.name, max_uncompressed_bytes=10**8).read(path).layers
+    layers = reader_for(path.name, ReadLimits(10**8)).read(path).layers
     crs_list = [layer.crs for layer in layers if layer.crs is not None]
 
     assert len(crs_list) == 2

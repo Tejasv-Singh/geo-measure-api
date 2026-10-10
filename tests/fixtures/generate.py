@@ -177,6 +177,20 @@ def shapefile_path_traversal(out: Path) -> Path:
     )
 
 
+def shapefile_encrypted(out: Path) -> Path:
+    """Sets the encryption flag on every entry; the bytes themselves are not encrypted."""
+    parts = write_shapefile_parts(parcels_frame(), "parcels")
+    path = write_zip(out / "shapefile_encrypted.zip", in_folder("", parts))
+    data = bytearray(path.read_bytes())
+    # zipfile resets flag_bits when writing, so set bit 0 in each central directory record.
+    start = 0
+    while (start := data.find(b"PK", start)) != -1:
+        data[start + 8] |= 0x1
+        start += 4
+    path.write_bytes(bytes(data))
+    return path
+
+
 def empty_zip(out: Path) -> Path:
     return write_zip(out / "empty.zip", [])
 
@@ -321,6 +335,10 @@ def golden_square_wgs84() -> Polygon:
     return polygon
 
 
+def kmz_without_kml(out: Path) -> Path:
+    return write_zip(out / "no_kml.kmz", [("readme.txt", b"no document here")])
+
+
 def kml_golden_square(out: Path) -> Path:
     placemark = kml_placemark("1 km square", kml_geometry(golden_square_wgs84()))
     path = out / "golden_square.kml"
@@ -346,6 +364,7 @@ GENERATORS: tuple[Callable[[Path], Path], ...] = (
     shapefile_cp1251,
     shapefile_self_intersecting,
     shapefile_path_traversal,
+    shapefile_encrypted,
     empty_zip,
     not_a_zip,
     kml_extended_data,
@@ -356,6 +375,7 @@ GENERATORS: tuple[Callable[[Path], Path], ...] = (
     kml_not_xml,
     kml_golden_square,
     kmz_sample,
+    kmz_without_kml,
 )
 
 

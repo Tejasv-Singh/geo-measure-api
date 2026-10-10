@@ -1,6 +1,7 @@
 import re
 import zipfile
 from pathlib import Path, PurePosixPath
+from typing import BinaryIO
 
 from app.core.errors import InvalidFileError
 
@@ -8,14 +9,14 @@ _JUNK_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
 _DRIVE_LETTER = re.compile(r"^[A-Za-z]:")
 
 
-def safe_member_names(path: Path, max_uncompressed_bytes: int) -> list[str]:
+def safe_member_names(archive_file: Path | BinaryIO, max_uncompressed_bytes: int) -> list[str]:
     """Validate a zip archive without extracting it and return its meaningful file entries.
 
     Raises InvalidFileError for corrupt or encrypted archives, unsafe entry names,
     archives that exceed the uncompressed size cap, and archives with no usable files.
     """
     try:
-        with zipfile.ZipFile(path) as archive:
+        with zipfile.ZipFile(archive_file) as archive:
             infos = archive.infolist()
     except zipfile.BadZipFile as exc:
         raise InvalidFileError("The file is not a valid zip archive.") from exc

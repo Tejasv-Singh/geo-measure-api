@@ -22,7 +22,7 @@ from app.services.measurement import (
     Measurement,
     measure_layer,
 )
-from app.services.readers import FeatureRecord, LayerRecord, reader_for
+from app.services.readers import FeatureRecord, LayerRecord, ReadLimits, reader_for
 
 AREA = MeasurementKind.AREA
 LENGTH = MeasurementKind.LENGTH
@@ -51,7 +51,7 @@ def measure_one(geometry: BaseGeometry | None, crs: CRS = WGS84) -> list[Measure
 
 
 def read_layer(path: Path) -> LayerRecord:
-    (layer,) = reader_for(path.name, max_uncompressed_bytes=10**8).read(path).layers
+    (layer,) = reader_for(path.name, ReadLimits(10**8)).read(path).layers
     return layer
 
 

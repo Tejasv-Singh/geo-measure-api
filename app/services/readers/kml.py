@@ -1,5 +1,5 @@
-from collections.abc import Iterator
 from pathlib import Path
+from typing import BinaryIO
 
 import geopandas as gpd
 import pandas as pd
@@ -7,7 +7,7 @@ import pyogrio
 from pyproj import CRS
 
 from app.core.errors import InvalidFileError
-from app.services.readers.base import GDAL_ERRORS, BaseReader, RawLayer
+from app.services.readers.base import GDAL_ERRORS, BaseReader, LayerSource, RawLayer
 from app.services.readers.zip_safety import safe_member_names
 
 # Columns the LIBKML driver adds to every layer, with the value it fills in when the KML is silent.
@@ -33,18 +33,27 @@ class KMLReader(BaseReader):
     format = "kml"
     extensions = (".kml", ".kmz")
 
-    def read_layers(self, path: Path) -> Iterator[RawLayer]:
+    def check_upload(self, source: BinaryIO) -> None:
+        if not self.filename.lower().endswith(".kmz"):
+            return
+        try:
+            self._check_kmz(source)
+        finally:
+            source.seek(0)
+
+    def layer_sources(self, path: Path) -> list[LayerSource]:
         if path.suffix.lower() == ".kmz":
             self._check_kmz(path)
+        return [LayerSource(name=name, source=path, layer=name) for name in self.layer_names(path)]
 
-        for layer_name in self.list_layer_names(path):
-            frame = drop_empty_boilerplate(self.read_frame(path, path, layer=layer_name))
-            # The KML spec fixes coordinates to WGS84 lon/lat, whatever GDAL reports.
-            yield RawLayer(
-                name=layer_name, frame=frame.set_crs(KML_CRS, allow_override=True), crs=KML_CRS
-            )
+    def read_layer(self, path: Path, source: LayerSource) -> RawLayer:
+        frame = drop_empty_boilerplate(self.read_frame(path, source.source, layer=source.layer))
+        # The KML spec fixes coordinates to WGS84 lon/lat, whatever GDAL reports.
+        return RawLayer(
+            name=source.name, frame=frame.set_crs(KML_CRS, allow_override=True), crs=KML_CRS
+        )
 
-    def list_layer_names(self, path: Path) -> list[str]:
+    def layer_names(self, path: Path) -> list[str]:
         try:
             layers = pyogrio.list_layers(path)
         except GDAL_ERRORS as exc:
@@ -53,8 +62,8 @@ class KMLReader(BaseReader):
             raise InvalidFileError("The KML document contains no layers.")
         return [str(name) for name, _ in layers]
 
-    def _check_kmz(self, path: Path) -> None:
-        names = safe_member_names(path, self.max_uncompressed_bytes)
+    def _check_kmz(self, archive: Path | BinaryIO) -> None:
+        names = safe_member_names(archive, self.limits.max_uncompressed_bytes)
         if not any(name.lower().endswith(".kml") for name in names):
             raise InvalidFileError("The KMZ archive does not contain a .kml document.")
 

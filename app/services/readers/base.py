@@ -1,21 +1,22 @@
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, BinaryIO, ClassVar
 
 import geopandas as gpd
+import pyogrio
 from pyogrio.errors import DataLayerError, DataSourceError
 from pyproj import CRS
 from shapely.geometry.base import BaseGeometry
 
-from app.core.errors import InvalidFileError
+from app.core.errors import InvalidFileError, TooManyFeaturesError
 from app.services.json_safe import JSONValue, to_json_safe
 
 logger = logging.getLogger(__name__)
 
 GDAL_ERRORS = (DataSourceError, DataLayerError)
+DEFAULT_MAX_FEATURES = 250_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,25 +53,71 @@ class RawLayer:
     crs: CRS | None
 
 
+@dataclass(frozen=True, slots=True)
+class ReadLimits:
+    max_uncompressed_bytes: int
+    max_features: int = DEFAULT_MAX_FEATURES
+
+
+@dataclass(frozen=True, slots=True)
+class LayerSource:
+    """Where GDAL finds one layer. has_crs_file marks a .prj sitting beside a .shp."""
+
+    name: str
+    source: str | Path
+    layer: str | None = None
+    has_crs_file: bool = False
+
+
 class BaseReader(ABC):
     format: ClassVar[str]
     extensions: ClassVar[tuple[str, ...]]
 
-    def __init__(self, filename: str, max_uncompressed_bytes: int) -> None:
+    def __init__(self, filename: str, limits: ReadLimits) -> None:
         self.filename = filename
-        self.max_uncompressed_bytes = max_uncompressed_bytes
+        self.limits = limits
+
+    def check_upload(self, source: BinaryIO) -> None:
+        """Cheap structural checks on the raw upload, run before it is stored.
+
+        Must leave the stream at position 0. GDAL reading waits for the background job.
+        Formats with no cheap checks, such as plain KML, keep this default.
+        """
+        return
 
     def read(self, path: Path) -> ReadResult:
+        sources = self.layer_sources(path)
+        self.check_feature_total(path, sources)
         layers: list[LayerRecord] = []
         next_index = 0
-        for raw in self.read_layers(path):
+        for source in sources:
+            raw = self.read_layer(path, source)
             features = to_feature_records(raw, start_index=next_index)
             next_index += len(features)
             layers.append(LayerRecord(name=raw.name, crs=raw.crs, features=features))
         return ReadResult(format=self.format, layers=layers)
 
     @abstractmethod
-    def read_layers(self, path: Path) -> Iterator[RawLayer]: ...
+    def layer_sources(self, path: Path) -> list[LayerSource]: ...
+
+    @abstractmethod
+    def read_layer(self, path: Path, source: LayerSource) -> RawLayer: ...
+
+    def check_feature_total(self, path: Path, sources: list[LayerSource]) -> None:
+        """Count features from layer metadata before reading any geometry."""
+        total = sum(self.feature_count(path, source) for source in sources)
+        if total > self.limits.max_features:
+            raise TooManyFeaturesError(
+                f"The file has {total} features; the limit is {self.limits.max_features}.",
+                {"feature_count": total, "limit": self.limits.max_features},
+            )
+
+    def feature_count(self, path: Path, source: LayerSource) -> int:
+        try:
+            info = pyogrio.read_info(source.source, layer=source.layer, force_feature_count=True)
+        except GDAL_ERRORS as exc:
+            raise self.gdal_error(exc, path, "GDAL could not read the data") from exc
+        return max(int(info["features"]), 0)
 
     def read_frame(
         self, path: Path, source: str | Path, layer: str | None = None

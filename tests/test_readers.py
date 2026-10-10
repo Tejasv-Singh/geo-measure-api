@@ -5,14 +5,20 @@ from pathlib import Path
 
 import pytest
 
-from app.core.errors import InvalidFileError, UnsupportedFileError
-from app.services.readers import KMLReader, ReadResult, ShapefileZipReader, reader_for
+from app.core.errors import InvalidFileError, TooManyFeaturesError, UnsupportedFileError
+from app.services.readers import (
+    KMLReader,
+    ReadLimits,
+    ReadResult,
+    ShapefileZipReader,
+    reader_for,
+)
 
-LIMIT = 50 * 1024 * 1024
+LIMIT = ReadLimits(50 * 1024 * 1024)
 
 
 def read(path: Path) -> ReadResult:
-    return reader_for(path.name, max_uncompressed_bytes=LIMIT).read(path)
+    return reader_for(path.name, LIMIT).read(path)
 
 
 def stored_copy(fixture: Path, tmp_path: Path) -> Path:
@@ -97,6 +103,8 @@ def test_self_intersecting_polygon_is_read_and_flagged(fixtures_dir: Path) -> No
         ("empty.zip", "archive is empty"),
         ("not_a_zip.zip", "not a valid zip"),
         ("shapefile_path_traversal.zip", "unsafe file paths"),
+        ("shapefile_encrypted.zip", "Encrypted zip archives"),
+        ("no_kml.kmz", "does not contain a .kml"),
     ],
 )
 def test_bad_shapefile_archives_are_rejected(
@@ -107,7 +115,7 @@ def test_bad_shapefile_archives_are_rejected(
 
 
 def test_zip_over_uncompressed_cap_is_rejected(fixtures_dir: Path) -> None:
-    reader = ShapefileZipReader(filename="parcels.zip", max_uncompressed_bytes=100)
+    reader = ShapefileZipReader(filename="parcels.zip", limits=ReadLimits(100))
 
     with pytest.raises(InvalidFileError, match="too large"):
         reader.read(fixtures_dir / "shapefile_two_layers.zip")
@@ -186,7 +194,7 @@ def test_gdal_errors_name_the_upload_not_the_stored_path(
     visible_path: str,
 ) -> None:
     stored = stored_copy(fixtures_dir / fixture, tmp_path)
-    reader = reader_for(upload_name, max_uncompressed_bytes=LIMIT)
+    reader = reader_for(upload_name, LIMIT)
 
     with caplog.at_level(logging.WARNING), pytest.raises(InvalidFileError) as exc_info:
         reader.read(stored)
@@ -200,7 +208,66 @@ def test_gdal_errors_name_the_upload_not_the_stored_path(
 
 def test_missing_layer_is_an_invalid_file(fixtures_dir: Path) -> None:
     path = fixtures_dir / "multi_folder.kml"
-    reader = KMLReader(filename=path.name, max_uncompressed_bytes=LIMIT)
+    reader = KMLReader(filename=path.name, limits=LIMIT)
 
     with pytest.raises(InvalidFileError, match="Layer 'Lakes' could not be opened"):
         reader.read_frame(path, path, layer="Lakes")
+
+
+@pytest.mark.parametrize(
+    ("fixture", "features"),
+    [("shapefile_two_layers.zip", 3), ("multi_folder.kml", 3), ("sample.kmz", 1)],
+)
+def test_feature_cap_counts_every_layer(fixtures_dir: Path, fixture: str, features: int) -> None:
+    path = fixtures_dir / fixture
+    at_cap = reader_for(path.name, ReadLimits(LIMIT.max_uncompressed_bytes, features))
+    over_cap = reader_for(path.name, ReadLimits(LIMIT.max_uncompressed_bytes, features - 1))
+
+    assert len(at_cap.read(path).features) == features
+    with pytest.raises(TooManyFeaturesError) as exc_info:
+        over_cap.read(path)
+    assert exc_info.value.code == "too_many_features"
+    assert exc_info.value.details == {"feature_count": features, "limit": features - 1}
+
+
+def test_feature_cap_is_checked_before_any_layer_is_read(
+    fixtures_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = fixtures_dir / "shapefile_two_layers.zip"
+    reader = reader_for(path.name, ReadLimits(LIMIT.max_uncompressed_bytes, 2))
+
+    def unexpected_read(*_: object, **__: object) -> None:
+        raise AssertionError("read_frame ran before the feature cap was checked")
+
+    monkeypatch.setattr(reader, "read_frame", unexpected_read)
+
+    with pytest.raises(TooManyFeaturesError):
+        reader.read(path)
+
+
+@pytest.mark.parametrize(
+    ("fixture", "message"),
+    [
+        ("shapefile_missing_dbf.zip", "matching .shx and .dbf"),
+        ("shapefile_path_traversal.zip", "unsafe file paths"),
+        ("shapefile_encrypted.zip", "Encrypted zip archives"),
+        ("no_kml.kmz", "does not contain a .kml"),
+    ],
+)
+def test_upload_check_rejects_bad_archives_from_a_stream(
+    fixtures_dir: Path, fixture: str, message: str
+) -> None:
+    path = fixtures_dir / fixture
+    with path.open("rb") as source:
+        source.seek(7)
+        with pytest.raises(InvalidFileError, match=message):
+            reader_for(path.name, LIMIT).check_upload(source)
+        assert source.tell() == 0
+
+
+@pytest.mark.parametrize("fixture", ["shapefile_two_layers.zip", "sample.kmz", "multi_folder.kml"])
+def test_upload_check_accepts_good_files_and_rewinds(fixtures_dir: Path, fixture: str) -> None:
+    path = fixtures_dir / fixture
+    with path.open("rb") as source:
+        reader_for(path.name, LIMIT).check_upload(source)
+        assert source.tell() == 0

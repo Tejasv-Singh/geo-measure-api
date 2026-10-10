@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     storage_dir: Path = Path("./data/uploads")
     max_upload_bytes: int = 50 * 1024 * 1024
     max_uncompressed_bytes: int = 500 * 1024 * 1024
+    max_features: int = 250_000
     log_level: str = "INFO"
 
 

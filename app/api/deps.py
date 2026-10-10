@@ -5,6 +5,7 @@ from fastapi import Depends, Request
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
+from app.services.readers import ReadLimits
 from app.storage import Storage
 
 
@@ -25,6 +26,13 @@ def get_session(
         yield session
 
 
+def get_read_limits(settings: Annotated[Settings, Depends(get_settings)]) -> ReadLimits:
+    return ReadLimits(
+        max_uncompressed_bytes=settings.max_uncompressed_bytes,
+        max_features=settings.max_features,
+    )
+
+
 def get_storage(request: Request) -> Storage:
     storage: Storage = request.app.state.storage
     return storage
@@ -34,3 +42,4 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 SessionFactoryDep = Annotated[sessionmaker[Session], Depends(get_session_factory)]
 SessionDep = Annotated[Session, Depends(get_session)]
 StorageDep = Annotated[Storage, Depends(get_storage)]
+ReadLimitsDep = Annotated[ReadLimits, Depends(get_read_limits)]

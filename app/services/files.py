@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import InvalidFileError, NotFoundError
 from app.models import FileStatus, GeoFile
 from app.services.crs import parse_crs
-from app.services.readers import reader_for
+from app.services.readers import ReadLimits, reader_for
 from app.storage import Storage
 
 MAGIC_BYTES = 512
@@ -23,14 +23,16 @@ def accept_upload(
     filename: str | None,
     source: BinaryIO,
     source_crs: str | None,
-    max_uncompressed_bytes: int,
+    limits: ReadLimits,
 ) -> GeoFile:
     """Validate and store an upload and create its PENDING row. Processing happens later."""
     name = clean_filename(filename)
-    reader = reader_for(name, max_uncompressed_bytes)
+    reader = reader_for(name, limits)
     requested_crs = clean_source_crs(source_crs)
     suffix = PurePath(name).suffix.lower()
     check_magic(suffix, source)
+    # Archive structure is checked now so a bad zip fails the upload, not the background job.
+    reader.check_upload(source)
 
     stored = storage.save(source, suffix)
     geo_file = GeoFile(

@@ -1,5 +1,7 @@
+import logging
 import uuid
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,9 +21,10 @@ from app.models import (
 )
 from app.services import pipeline
 from app.services.pipeline import GENERIC_FAILURE, INTERRUPTED, run_file_job
+from app.services.readers import ReadLimits
 from app.storage import LocalStorage
 
-LIMIT = 10**8
+LIMIT = ReadLimits(10**8)
 
 
 def upload(
@@ -328,3 +331,47 @@ def test_startup_prepares_storage_and_database(settings: Settings) -> None:
     with TestClient(create_app(settings)) as client:
         assert settings.storage_dir.is_dir()
         assert client.app.state.session_factory is not None  # type: ignore[attr-defined]
+
+
+def test_file_deleted_while_processing_is_not_logged_as_processed(
+    session_factory: sessionmaker[Session],
+    storage: LocalStorage,
+    fixtures_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    file_id = upload(session_factory, storage, fixtures_dir / "golden_square.kml")
+    original = pipeline.process_file
+
+    def process_then_delete(*args: Any) -> pipeline.ProcessedFile:
+        processed = original(*args)
+        with session_factory() as session:
+            geo_file = session.get(GeoFile, file_id)
+            assert geo_file is not None
+            session.delete(geo_file)
+            session.commit()
+        return processed
+
+    monkeypatch.setattr(pipeline, "process_file", process_then_delete)
+
+    with caplog.at_level(logging.INFO, logger="app.services.pipeline"):
+        run_file_job(file_id, session_factory, storage, LIMIT)
+
+    assert "deleted while processing" in caplog.text
+    assert "Processed file" not in caplog.text
+    assert layers_of(session_factory, file_id) == []
+
+
+def test_too_many_features_is_recorded_with_count_and_limit(
+    session_factory: sessionmaker[Session], storage: LocalStorage, fixtures_dir: Path
+) -> None:
+    file_id = upload(session_factory, storage, fixtures_dir / "multi_folder.kml")
+
+    run_file_job(file_id, session_factory, storage, ReadLimits(10**8, max_features=2))
+
+    with session_factory() as session:
+        geo_file = session.get(GeoFile, file_id)
+        assert geo_file is not None
+        assert geo_file.status is FileStatus.FAILED
+        assert geo_file.error_code == "too_many_features"
+        assert geo_file.error_details == {"feature_count": 3, "limit": 2}

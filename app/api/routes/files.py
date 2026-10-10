@@ -4,7 +4,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, BackgroundTasks, File, Form, Query, Response, UploadFile, status
 from fastapi.responses import JSONResponse
 
-from app.api.deps import SessionDep, SessionFactoryDep, SettingsDep, StorageDep
+from app.api.deps import ReadLimitsDep, SessionDep, SessionFactoryDep, StorageDep
+from app.core.logging import request_id_var
 from app.models import FileStatus, GeoFile, MeasurementKind, MeasurementStatus
 from app.models.enums import GeometryType
 from app.schemas.common import DEFAULT_LIMIT, MAX_LIMIT, ErrorResponse
@@ -61,7 +62,7 @@ def upload_file(
     session: SessionDep,
     session_factory: SessionFactoryDep,
     storage: StorageDep,
-    settings: SettingsDep,
+    limits: ReadLimitsDep,
     file: Annotated[UploadFile, File(description="A .zip with a shapefile, a .kml or a .kmz.")],
     source_crs: Annotated[
         str | None,
@@ -72,11 +73,9 @@ def upload_file(
     ] = None,
 ) -> UploadAccepted:
     """Store the file and start processing in the background. Poll GET /api/files/{id}/."""
-    geo_file = files.accept_upload(
-        session, storage, file.filename, file.file, source_crs, settings.max_uncompressed_bytes
-    )
+    geo_file = files.accept_upload(session, storage, file.filename, file.file, source_crs, limits)
     background_tasks.add_task(
-        run_file_job, geo_file.id, session_factory, storage, settings.max_uncompressed_bytes
+        run_file_job, geo_file.id, session_factory, storage, limits, request_id_var.get()
     )
     response.headers["Location"] = f"/api/files/{geo_file.id}/"
     return UploadAccepted(id=geo_file.id, status=geo_file.status)

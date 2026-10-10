@@ -22,11 +22,12 @@ from sqlalchemy import insert, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.errors import AppError
+from app.core.logging import request_context
 from app.models import Feature, FileStatus, GeoFile, Layer, Measurement
 from app.models.base import utcnow
 from app.services.crs import crs_label, crs_wkt, parse_crs, resolve_layer_crs, summarize_crs
 from app.services.measurement import MeasuredFeature, measure_layer
-from app.services.readers import reader_for
+from app.services.readers import ReadLimits, reader_for
 from app.storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -55,11 +56,11 @@ class ProcessedFile:
 
 
 def process_file(
-    path: Path, filename: str, max_uncompressed_bytes: int, requested_crs: str | None
+    path: Path, filename: str, limits: ReadLimits, requested_crs: str | None
 ) -> ProcessedFile:
     """Raises AppError for anything wrong with the file itself."""
     fallback = parse_crs(requested_crs) if requested_crs else None
-    result = reader_for(filename, max_uncompressed_bytes).read(path)
+    result = reader_for(filename, limits).read(path)
     layers = []
     for layer in result.layers:
         crs = resolve_layer_crs(layer.name, layer.crs, fallback)
@@ -75,13 +76,25 @@ def run_file_job(
     file_id: uuid.UUID,
     session_factory: sessionmaker[Session],
     storage: Storage,
-    max_uncompressed_bytes: int,
+    limits: ReadLimits,
+    request_id: str | None = None,
 ) -> None:
     """Process one stored file. It always ends COMPLETED or FAILED, never PROCESSING.
 
     Safe to run more than once for the same file, as an at-least-once job queue would: only the
-    run that moves the file out of PENDING does any work.
+    run that moves the file out of PENDING does any work. request_id is the upload's, so the
+    upload and its processing share one ID in the logs.
     """
+    with request_context(request_id):
+        _run_file_job(file_id, session_factory, storage, limits)
+
+
+def _run_file_job(
+    file_id: uuid.UUID,
+    session_factory: sessionmaker[Session],
+    storage: Storage,
+    limits: ReadLimits,
+) -> None:
     started = time.perf_counter()
     try:
         with session_factory() as session:
@@ -94,16 +107,19 @@ def run_file_job(
             filename, requested_crs = geo_file.filename, geo_file.requested_crs
 
         try:
-            processed = process_file(path, filename, max_uncompressed_bytes, requested_crs)
+            processed = process_file(path, filename, limits, requested_crs)
         except AppError as exc:
             logger.info("File %s could not be processed: %s", file_id, exc.message)
             mark_failed(session_factory, file_id, exc.code, exc.message, exc.details, started)
             return
 
         with session_factory() as session:
-            save_result(session, file_id, processed, elapsed_ms(started))
+            saved = save_result(session, file_id, processed, elapsed_ms(started))
             session.commit()
-        logger.info("Processed file %s: %d features", file_id, processed.feature_count)
+        if saved:
+            logger.info("Processed file %s: %d features", file_id, processed.feature_count)
+        else:
+            logger.info("File %s was deleted while processing; results discarded", file_id)
     except Exception:
         logger.exception("Unexpected error while processing file %s", file_id)
         mark_failed(session_factory, file_id, "internal_error", GENERIC_FAILURE, None, started)
@@ -122,11 +138,11 @@ def claim(session: Session, file_id: uuid.UUID) -> bool:
 
 def save_result(
     session: Session, file_id: uuid.UUID, processed: ProcessedFile, processing_ms: int
-) -> None:
+) -> bool:
+    """Write the results. False, writing nothing, if the file was deleted meanwhile."""
     geo_file = session.get(GeoFile, file_id)
     if geo_file is None:
-        logger.warning("File %s was deleted while processing", file_id)
-        return
+        return False
 
     for processed_layer in processed.layers:
         layer = Layer(
@@ -150,6 +166,7 @@ def save_result(
     geo_file.error_details = None
     geo_file.processing_ms = processing_ms
     geo_file.processed_at = utcnow()
+    return True
 
 
 def insert_features(

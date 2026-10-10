@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app import __version__
-from app.api.middleware import UploadSizeLimitMiddleware
+from app.api.middleware import RequestIDMiddleware, UploadSizeLimitMiddleware
 from app.api.routes import files, health
 from app.core.config import Settings, get_settings
 from app.core.errors import register_error_handlers
@@ -47,6 +47,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(
         UploadSizeLimitMiddleware, path="/api/files/", max_file_bytes=settings.max_upload_bytes
     )
+    # Added last so it is the outermost middleware and sees every response, including a 413.
+    app.add_middleware(RequestIDMiddleware)
     app.include_router(health.router)
     app.include_router(files.router)
     return app
