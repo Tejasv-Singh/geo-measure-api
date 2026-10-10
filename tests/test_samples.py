@@ -1,5 +1,6 @@
 """The committed samples/ files: current with their generator, and processing as documented."""
 
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -11,9 +12,20 @@ from tests.test_api import upload_ok
 SAMPLES = Path(__file__).resolve().parent.parent / "samples"
 
 
+def contents(path: Path) -> dict[str, bytes]:
+    """A file's bytes, or for a zip the bytes of each member.
+
+    Compressed zip bytes depend on the zlib build, which differs between platforms.
+    """
+    if path.suffix != ".zip":
+        return {path.name: path.read_bytes()}
+    with zipfile.ZipFile(path) as archive:
+        return {name: archive.read(name) for name in archive.namelist()}
+
+
 def test_committed_samples_match_the_generator(tmp_path: Path) -> None:
     for generated in make_samples(tmp_path):
-        assert (SAMPLES / generated.name).read_bytes() == generated.read_bytes(), generated.name
+        assert contents(SAMPLES / generated.name) == contents(generated), generated.name
 
 
 def test_survey_sample(client: TestClient) -> None:
@@ -46,7 +58,8 @@ def test_utm_parcels_sample(client: TestClient) -> None:
 
     assert (info["status"], info["crs"], info["feature_count"]) == ("COMPLETED", "EPSG:32643", 3)
     areas = [r["value"] for r in page["items"]]
-    # 90 x 70, 110 x 70 and 60 x 120 m in UTM grid units, about 0.1% larger on the ground here.
+    # 90 x 70, 110 x 70 and 60 x 120 m in UTM grid units. About 280 km east of the central
+    # meridian the UTM scale factor is about 1.0006, so the ground areas are 0.1% smaller.
     assert areas == pytest.approx([6_300, 7_700, 7_200], rel=2e-3)
 
 
