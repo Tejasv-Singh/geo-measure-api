@@ -95,6 +95,13 @@ class RequestIDMiddleware:
         request_id_var.set(request_id)
         started = time.perf_counter()
         status_code = 500
+        logged = False
+
+        def log_request() -> None:
+            nonlocal logged
+            logged = True
+            elapsed = (time.perf_counter() - started) * 1000
+            logger.info("%s %s %s %.0fms", scope["method"], scope["path"], status_code, elapsed)
 
         async def send_with_id(message: Message) -> None:
             nonlocal status_code
@@ -102,12 +109,16 @@ class RequestIDMiddleware:
                 status_code = message["status"]
                 MutableHeaders(scope=message).append("X-Request-ID", request_id)
             await send(message)
+            # Log when the client has the whole response. Background tasks run after this, inside
+            # the same app call, and must not count towards the request's duration.
+            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                log_request()
 
         try:
             await self.app(scope, receive, send_with_id)
         finally:
-            elapsed = (time.perf_counter() - started) * 1000
-            logger.info("%s %s %s %.0fms", scope["method"], scope["path"], status_code, elapsed)
+            if not logged:
+                log_request()
 
 
 def header(scope: Scope, name: bytes) -> str | None:

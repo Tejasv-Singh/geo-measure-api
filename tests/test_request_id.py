@@ -1,11 +1,13 @@
 import logging
 import re
+import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.api.routes import files as files_route
 from app.core.config import Settings
 from app.core.logging import clean_request_id, request_context, request_id_var
 from app.main import create_app
@@ -131,3 +133,48 @@ def test_background_job_logs_under_the_id_it_is_given(
     assert records
     assert {r.request_id for r in records} == {"job-7"}  # type: ignore[attr-defined]
     assert request_id_var.get() is None
+
+
+def test_request_duration_excludes_background_work(
+    client: TestClient,
+    fixtures_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def slow_job(*_: object) -> None:
+        time.sleep(0.5)
+
+    monkeypatch.setattr(files_route, "run_file_job", slow_job)
+
+    with (
+        caplog.at_level(logging.INFO, logger="app.requests"),
+        (fixtures_dir / "golden_square.kml").open("rb") as handle,
+    ):
+        started = time.perf_counter()
+        response = client.post("/api/files/", files={"file": ("golden_square.kml", handle)})
+        total = time.perf_counter() - started
+
+    assert response.status_code == 202
+    assert total >= 0.5, "the background job should have run inside the request call"
+    (record,) = records_for(caplog, "app.requests")
+    duration_ms = float(re.search(r" (\d+)ms$", record.getMessage()).group(1))  # type: ignore[union-attr]
+    assert duration_ms < 500
+
+
+def test_request_is_logged_once_when_the_app_fails(
+    settings: Settings, caplog: pytest.LogCaptureFixture
+) -> None:
+    app = create_app(settings)
+
+    def boom() -> None:
+        raise RuntimeError("boom")
+
+    app.add_api_route("/boom", boom)
+    with (
+        caplog.at_level(logging.INFO, logger="app.requests"),
+        TestClient(app, raise_server_exceptions=False) as client,
+    ):
+        client.get("/boom")
+
+    (record,) = records_for(caplog, "app.requests")
+    assert record.getMessage().startswith("GET /boom 500 ")
