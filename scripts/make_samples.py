@@ -137,9 +137,10 @@ def golden_square() -> str:
         "the UTM scale factor is close to 1, then converted to EPSG:4326.</description>",
         "      <Polygon>",
         "        <outerBoundaryIs>",
-        # Full precision, so the measured area reproduces the test to 1e-5.
+        # 9 decimals (about 0.1 mm): exact enough for the 1e-5 area check, and stable across
+        # platforms, where the last bits of the PROJ transform can differ.
         "          <LinearRing><coordinates>"
-        + " ".join(f"{x!r},{y!r}" for x, y in golden_square_wgs84().exterior.coords)
+        + " ".join(f"{x:.9f},{y:.9f}" for x, y in golden_square_wgs84().exterior.coords)
         + "</coordinates></LinearRing>",
         "        </outerBoundaryIs>",
         "      </Polygon>",

@@ -9,7 +9,7 @@
       <description>Built as a 1000 m square in EPSG:32643 at easting 680000, where the UTM scale factor is close to 1, then converted to EPSG:4326.</description>
       <Polygon>
         <outerBoundaryIs>
-          <LinearRing><coordinates>76.8307551547827,28.013059538745424 76.84092174219165,28.01292371058534 76.8410752504177,28.02194630657024 76.83090781640917,28.022082186081622 76.8307551547827,28.013059538745424</coordinates></LinearRing>
+          <LinearRing><coordinates>76.830755155,28.013059539 76.840921742,28.012923711 76.841075250,28.021946307 76.830907816,28.022082186 76.830755155,28.013059539</coordinates></LinearRing>
         </outerBoundaryIs>
       </Polygon>
     </Placemark>
