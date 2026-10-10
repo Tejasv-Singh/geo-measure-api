@@ -8,6 +8,17 @@ services:
       STORAGE_DIR: /app/data/uploads
     volumes:
       - uploads:/app/data/uploads
+    healthcheck:
+      # The slim image has no curl or wget.
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/health')
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
     depends_on:
       db:
         condition: service_healthy

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from sqlalchemy import Engine, text
@@ -20,6 +21,8 @@ def test_sqlite_parent_directory_is_created(tmp_path: Path) -> None:
 
 
 def test_sqlite_uses_wal_and_foreign_keys(engine: Engine) -> None:
+    if engine.dialect.name != "sqlite":
+        pytest.skip("SQLite pragmas")
     with engine.connect() as connection:
         assert connection.execute(text("PRAGMA journal_mode")).scalar() == "wal"
         assert connection.execute(text("PRAGMA foreign_keys")).scalar() == 1

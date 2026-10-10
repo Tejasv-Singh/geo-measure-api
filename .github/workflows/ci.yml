@@ -20,8 +20,53 @@ jobs:
       - run: mypy app tests
       - run: pytest
 
-  docker:
+  test-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: geo
+          POSTGRES_PASSWORD: geo
+          POSTGRES_DB: geo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U geo -d geo"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      # conftest.py gives each test its own database copied from a migrated template.
+      DATABASE_URL: postgresql+psycopg://geo:geo@localhost:5432/geo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev,postgres]"
+      - run: pytest
+
+  docker-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t geo-measure-api .
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Generate the golden KML
+        run: |
+          pip install -e ".[dev]"
+          python -m tests.fixtures.generate "$RUNNER_TEMP/fixtures"
+      - name: Start the stack
+        run: docker compose up --build --wait --wait-timeout 180
+      - name: Upload and measure
+        run: bash scripts/smoke_test.sh "$RUNNER_TEMP/fixtures/golden_square.kml"
+      - name: Show logs
+        if: failure()
+        run: docker compose logs
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v
