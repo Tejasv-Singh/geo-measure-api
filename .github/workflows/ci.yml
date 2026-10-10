@@ -19,7 +19,10 @@ jobs:
       - run: ruff format --check .
       - run: mypy app tests scripts
       - name: Run pytest
-        run: pytest -rfE --tb=short | tee pytest.log
+        # Without pipefail the step would take tee's exit status and hide test failures.
+        run: |
+          set -o pipefail
+          pytest -rfE --tb=short | tee pytest.log
       - name: Annotate test failures
         if: failure()
         run: grep -E "^(FAILED|ERROR|E  )" pytest.log | head -50 | sed 's/^/::error::/'
@@ -51,7 +54,10 @@ jobs:
           cache: pip
       - run: pip install -c requirements.lock -e ".[dev,postgres]"
       - name: Run pytest
-        run: pytest -rfE --tb=short | tee pytest.log
+        # Without pipefail the step would take tee's exit status and hide test failures.
+        run: |
+          set -o pipefail
+          pytest -rfE --tb=short | tee pytest.log
       - name: Annotate test failures
         if: failure()
         run: grep -E "^(FAILED|ERROR|E  )" pytest.log | head -50 | sed 's/^/::error::/'
