@@ -555,14 +555,14 @@ the script for timings, which are not asserted in tests.
 
 | Quantity | Result | Reproduced by |
 | --- | --- | --- |
-| A 1000 m square built in EPSG:32643 at easting 680,000, uploaded as KML in EPSG:4326 | 999,995.73 m2 (relative error 4.3e-6) | `test_measurement.py::test_golden_square_from_kml_is_one_square_kilometre`, `test_samples.py::test_golden_square_sample` |
+| A 1000 m square built in EPSG:32643 at easting 680,000, uploaded as KML in EPSG:4326 | 999,995.73 m2 from the test fixture (full-precision coordinates), 999,995.69 m2 from `samples/golden_square.kml` (9-decimal coordinates); relative error 4.3e-6 for both | `test_measurement.py::test_golden_square_from_kml_is_one_square_kilometre`, `test_samples.py::test_golden_square_sample` |
 | The same square at the zone's central meridian, easting 500,000 | 1,000,800.47 m2 | `test_measurement.py::test_utm_grid_square_at_the_central_meridian_is_larger_on_the_ground` |
 | UTM length against geodesic, 0.05 degree diagonal lines | +0.096% at the equator, +0.009% at 28N mid-zone, +0.062% at 28N near the zone edge, -0.036% at 60N, -0.033% at 45S, -0.039% at 83.9N | `test_measurement.py::test_utm_length_is_within_a_quarter_percent_of_geodesic` (asserts under 0.25%) |
 | UPS length against geodesic at 86N | -0.49% | `test_measurement.py::test_polar_length_uses_ups_and_says_so` (asserts under 0.6%) |
 | LAEA area against geodesic, at the same seven locations | at most 1e-5% (largest: -9.5e-6%) | `test_measurement.py::test_equal_area_matches_geodesic_area` (asserts under 0.001%) |
 | Web Mercator (EPSG:3857) area of a 0.01 degree square at Bengaluru, the rejected option | +5.95% | `test_measurement.py::test_web_mercator_overstates_area_at_bengaluru` |
-| Projecting 2,000 polygons over 3 x 3 degrees with LAEA | 8.23 s with one CRS per feature, 0.07 s with snapped centres (9 CRS objects) | `scripts/benchmark.py`; the CRS count by `test_projection.py::test_layer_over_three_by_three_degrees_builds_at_most_nine_crs` |
-| Processing a 60,000-polygon zipped shapefile on SQLite: read, measure, store | 28.3 s | `scripts/benchmark.py` |
+| Projecting 2,000 polygons over 3 x 3 degrees with LAEA | Windows laptop: 8.23 s with one CRS per feature, 0.07 s with snapped centres (114x). Linux container: 2.10 s and 0.02 s (115x). Snapping leaves 9 CRS objects. | `scripts/benchmark.py`; the CRS count by `test_projection.py::test_layer_over_three_by_three_degrees_builds_at_most_nine_crs` |
+| Processing a 60,000-polygon zipped shapefile on SQLite: read, measure, store | Windows laptop: 28.3 s. Linux container: 4.2 s. | `scripts/benchmark.py` |
 
 **Why easting 680,000.** UTM shrinks distances by 0.9996 on the central meridian, and the scale
 factor grows to 1 about 180 km either side of it. A square that is 1000 m on the UTM grid at the
@@ -570,8 +570,10 @@ central meridian is therefore about 1,000,800 m2 on the ground. The golden test 
 where the scale factor is close to 1, so that 1,000,000 m2 is the correct answer, and the second
 row shows the same square at the central meridian.
 
-Timings were taken on a 16-thread Intel laptop running Windows 11 and Python 3.12. In the 60,000
-feature run, most of the time goes to the per-feature geodesic calculation and the bulk inserts.
+Timings come from `python -m scripts.benchmark` on two machines, both with Python 3.12: the
+"Windows laptop" is a 16-thread Intel laptop running Windows 11, and the "Linux container" is a
+2-core Linux container. In the 60,000 feature run, most of the time goes to the per-feature
+geodesic calculation and the bulk inserts.
 
 ## Design Decisions
 
@@ -634,8 +636,10 @@ no longer duplicate rows or fail a finished file.
   several worker processes, a starting worker would also fail files another worker is processing.
 - **BackgroundTasks is not durable.** A job in progress is lost if the process stops; the file is
   marked `interrupted` on the next start and must be uploaded again.
-- **UPS near the poles.** Lengths north of 84N or south of 80S are measured in UPS, which is 0.3% to
-  0.6% off at those latitudes. The note says so; `geodesic_value` is the better figure there.
+- **UPS near the poles.** Lengths north of 84N or south of 80S are measured in UPS. Its scale
+  factor is approximately k = 2 * 0.994 / (1 + sin(lat)), which gives -0.33% at 84N and -0.6% at
+  the pole, consistent with the -0.49% measured at 86N. The note says so; `geodesic_value` is the
+  better figure there.
 - **Planimetric values.** Z values are ignored, so areas and lengths are horizontal projections,
   not surface areas or slope lengths.
 - **Swapped coordinates.** A file with latitude and longitude swapped but valid-looking values
