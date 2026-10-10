@@ -9,9 +9,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # pyogrio and pyproj wheels bundle GDAL and PROJ, so no system GIS packages are needed.
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md requirements.lock ./
 COPY app ./app
-RUN pip install ".[postgres]"
+RUN pip install -c requirements.lock ".[postgres]"
 COPY alembic.ini ./
 COPY migrations ./migrations
 

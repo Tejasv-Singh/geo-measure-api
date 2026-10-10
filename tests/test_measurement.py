@@ -257,3 +257,24 @@ def test_layer_results_keep_feature_order_and_wgs84_geometry() -> None:
     assert measured[0].geometry_wgs84.equals_exact(expected, tolerance=1e-9)
     assert measured[1].geometry_wgs84 is None
     assert measured[2].measurements[0].value == pytest.approx(1_000, rel=1e-3)
+
+
+def test_utm_grid_square_at_the_central_meridian_is_larger_on_the_ground() -> None:
+    # The UTM scale factor is 0.9996 on the central meridian (easting 500,000), so 1 km of grid
+    # is 1.0004 km on the ground and the square is about 1,000,800 m2. See golden_square.kml.
+    (area,) = measure_one(box(500_000, 3_100_000, 501_000, 3_101_000), UTM_43N)
+
+    assert area.value == pytest.approx(1_000_800, rel=1e-5)
+
+
+def test_web_mercator_overstates_area_at_bengaluru() -> None:
+    # The rejected option: measure in EPSG:3857 directly. Its scale grows with latitude.
+    square = box(77.59, 12.97, 77.60, 12.98)
+    mercator_area = gpd.GeoSeries([square], crs=WGS84).to_crs(3857).iloc[0].area
+
+    (area,) = measure_one(square)
+
+    assert area.geodesic_value is not None and area.deviation_pct is not None
+    error_pct = (mercator_area - area.geodesic_value) / area.geodesic_value * 100
+    assert error_pct == pytest.approx(5.95, abs=0.01)
+    assert abs(area.deviation_pct) < 1e-5

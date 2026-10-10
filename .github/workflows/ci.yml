@@ -14,10 +14,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e ".[dev]"
+      - run: pip install -c requirements.lock -e ".[dev]"
       - run: ruff check .
       - run: ruff format --check .
-      - run: mypy app tests
+      - run: mypy app tests scripts
       - run: pytest
 
   test-postgres:
@@ -45,25 +45,21 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e ".[dev,postgres]"
+      - run: pip install -c requirements.lock -e ".[dev,postgres]"
       - run: pytest
 
   docker-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The smoke script parses JSON with Python's standard library only.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
-      - name: Generate the golden KML
-        run: |
-          pip install -e ".[dev]"
-          python -m tests.fixtures.generate "$RUNNER_TEMP/fixtures"
       - name: Start the stack
         run: docker compose up --build --wait --wait-timeout 180
       - name: Upload and measure
-        run: bash scripts/smoke_test.sh "$RUNNER_TEMP/fixtures/golden_square.kml"
+        run: bash scripts/smoke_test.sh samples/golden_square.kml
       - name: Show logs
         if: failure()
         run: docker compose logs

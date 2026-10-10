@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+  <name>Survey, Bengaluru</name>
+  <Folder>
+    <name>Plots</name>
+    <Placemark id="plot-101">
+      <name>Plot 101</name>
+      <ExtendedData>
+        <Data name="survey_no"><value>SY-101</value></Data>
+        <Data name="land_use"><value>residential</value></Data>
+        <Data name="surveyor"><value>Field team A</value></Data>
+      </ExtendedData>
+      <Polygon>
+        <outerBoundaryIs>
+          <LinearRing><coordinates>77.591000,12.971000 77.591900,12.971000 77.591900,12.971700 77.591000,12.971700 77.591000,12.971000</coordinates></LinearRing>
+        </outerBoundaryIs>
+      </Polygon>
+    </Placemark>
+    <Placemark id="plot-102">
+      <name>Plot 102 with courtyard</name>
+      <ExtendedData>
+        <Data name="survey_no"><value>SY-102</value></Data>
+        <Data name="land_use"><value>commercial</value></Data>
+        <Data name="surveyor"><value>Field team A</value></Data>
+      </ExtendedData>
+      <Polygon>
+        <outerBoundaryIs>
+          <LinearRing><coordinates>77.593000,12.971000 77.594000,12.971000 77.594000,12.971650 77.593000,12.971650 77.593000,12.971000</coordinates></LinearRing>
+        </outerBoundaryIs>
+        <innerBoundaryIs>
+          <LinearRing><coordinates>77.593400,12.971250 77.593600,12.971250 77.593600,12.971400 77.593400,12.971400 77.593400,12.971250</coordinates></LinearRing>
+        </innerBoundaryIs>
+      </Polygon>
+    </Placemark>
+  </Folder>
+  <Folder>
+    <name>Infrastructure</name>
+    <Placemark>
+      <name>Access road</name>
+      <ExtendedData>
+        <Data name="surface"><value>asphalt</value></Data>
+        <Data name="lanes"><value>2</value></Data>
+      </ExtendedData>
+      <LineString><coordinates>77.590500,12.970800 77.592500,12.970850 77.594500,12.970900</coordinates></LineString>
+    </Placemark>
+    <Placemark>
+      <name>Borewell</name>
+      <ExtendedData>
+        <Data name="depth_m"><value>120</value></Data>
+      </ExtendedData>
+      <Point><coordinates>77.591500,12.971400</coordinates></Point>
+    </Placemark>
+    <Placemark>
+      <name>Pump house and pipeline</name>
+      <ExtendedData>
+        <Data name="status"><value>planned</value></Data>
+      </ExtendedData>
+      <MultiGeometry>
+        <Polygon>
+          <outerBoundaryIs>
+            <LinearRing><coordinates>77.594200,12.972000 77.594280,12.972000 77.594280,12.972060 77.594200,12.972060 77.594200,12.972000</coordinates></LinearRing>
+          </outerBoundaryIs>
+        </Polygon>
+        <LineString><coordinates>77.594240,12.972000 77.594240,12.971400 77.592000,12.971400</coordinates></LineString>
+        <Point><coordinates>77.592000,12.971400</coordinates></Point>
+      </MultiGeometry>
+    </Placemark>
+  </Folder>
+</Document>
+</kml>
