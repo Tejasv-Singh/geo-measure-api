@@ -577,56 +577,70 @@ geodesic calculation and the bulk inserts.
 
 ## Design Decisions
 
-This section is a draft.
+Each decision below lists what I picked, what I considered instead, and what it costs.
 
-**FastAPI.** Chosen for typed request parsing, Pydantic response models and generated OpenAPI
-documentation. Alternatives: Django REST Framework, which brings an ORM, admin and auth that this
-service does not need; Flask, which would need extra libraries for validation and docs. Trade-off:
-FastAPI is async-first, but most of the work here is CPU-bound GDAL and GEOS calls, so the routes
-are plain functions run in a thread pool.
+**FastAPI.** I wanted typed request parsing, Pydantic response models and OpenAPI docs without
+wiring them up myself, and FastAPI gives all three. Django REST Framework would have brought an
+ORM, admin and auth that this service has no use for, and Flask would have needed extra libraries
+for validation and docs. The catch is that FastAPI is built around async, while almost everything
+expensive here is CPU-bound GDAL and GEOS work. So the routes are plain functions that FastAPI
+runs in its thread pool, and I didn't pretend any of it was async.
 
-**BackgroundTasks instead of a job queue.** Processing runs in-process after the response is sent.
-Alternatives: Celery or arq with Redis, or a database-backed queue. Trade-off: no extra service to
-run, but jobs are lost if the process stops. A restart marks unfinished files `FAILED` with
-`interrupted`, and the job function takes only a file id, so it can move to a queue unchanged.
+**BackgroundTasks, not a job queue.** Processing runs in the API process after the 202 is sent. A
+real queue (Celery or arq with Redis, or a table polled by a worker) is the right answer in
+production, but it adds a service to run and operate for an assignment that doesn't need one yet.
+The cost is durability: if the process dies, the job is gone. I limited the damage in two ways.
+On startup, unfinished files are marked `FAILED` with `interrupted`, so nothing stays stuck in
+`PROCESSING`. And the job takes nothing but a file id, so moving it onto a queue later means
+changing how it is called, not what it does.
 
-**SQLite by default, Postgres in Docker.** SQLite needs no setup for local runs and tests; Postgres
-is what a deployment would use. Alternative: Postgres only, which is closer to production but makes
-local setup heavier. Trade-off: SQL must stay portable, so both run in CI. SQLite runs in WAL mode
-because the background thread writes while requests read.
+**SQLite by default, Postgres in Docker.** I wanted `git clone` to `pytest` to work with nothing
+else installed, which SQLite allows. Postgres is what I'd deploy, so Docker Compose uses it. Using
+only Postgres would have been closer to production but heavier to set up. Supporting both means
+keeping the SQL portable, and the only way I trust that is running the full test suite on both in
+CI. SQLite runs in WAL mode because the background thread writes while requests read.
 
-**A projection chosen per feature.** Areas use a local equal-area projection, lengths the
-feature's UTM zone. Alternatives: one projection per file (wrong for files spanning zones), Web
-Mercator (area off by about 6% at Bengaluru and much more at higher latitudes), or purely geodesic
-measurement (no projection at all, but less familiar to GIS users and harder to cross-check).
-Trade-off: more CRS handling code, kept fast by grouping features by CRS. Geodesic values are also
-stored, so the projection error is visible per row.
+**A projection per feature.** Areas are measured in a Lambert Azimuthal Equal-Area projection
+near the feature, lengths in the feature's UTM zone. One projection for the whole file breaks as
+soon as a file spans zones. Web Mercator is wrong by about 6% in area at Bengaluru (there's a test
+for that) and gets worse towards the poles. Measuring everything geodesically would avoid
+projections altogether, but the assignment asks for projected measurements, and I wanted the
+geodesic value as an independent check rather than the only answer. This took more CRS code than
+any other part. Grouping features that share a CRS keeps it fast, and storing the geodesic value
+next to each result makes the projection error visible on every row.
 
-**Flat measurement rows.** One row per measurement, with the feature index, layer and geometry type
-repeated. Alternative: measurements nested under features. Trade-off: some repetition, but simple
-filtering, pagination and SQL aggregates, and a GeometryCollection with both an area and a length
-fits without special cases.
+**Flat measurement rows.** Each measurement is its own row, with the feature index, layer and
+geometry type repeated on it. Nesting measurements under features would have looked tidier in
+JSON, but flat rows make filtering, pagination and the SQL aggregates for the summary
+straightforward. They also handle a GeometryCollection, which gets both an area and a length,
+without a special case. The cost is some repeated fields in the response.
 
-**409 for unfinished or failed files.** The results endpoints return 409 with `not_ready` or
-`file_failed`. Alternatives: 200 with an empty list, which hides the state, or 202, which suggests
-the request itself was accepted for later. Trade-off: clients must handle 409, but cannot mistake a
-pending file for one with no features.
+**409 for files that aren't ready or failed.** The measurements and features endpoints return 409
+with `not_ready` or `file_failed` instead of data. I considered returning 200 with an empty list,
+but then a client can't tell a pending file from a file with no features. A 202 would suggest the
+request itself had been queued, which isn't true. 409 means clients have to handle one more
+status, which I think is the right price for not being misled.
 
-**Upload-time and background checks.** Cheap checks (extension, magic bytes, zip central directory,
-size, `source_crs`) run before the file is stored and return 4xx at once. Everything that needs
-GDAL runs in the background. Alternative: validate everything in the request, which makes uploads
-slow, or nothing, which stores files that can never be processed. Trade-off: some errors arrive as
-an HTTP status and others as a `FAILED` file, so both are documented.
+**Cheap checks at upload, GDAL in the background.** Everything that can be checked quickly
+(extension, magic bytes, the zip's central directory, size, `source_crs`) is checked before the
+file is stored, and fails with a 4xx straight away. Anything that needs GDAL to open the file
+happens in the background job. Doing all of it in the request would make large uploads slow and
+tie up a worker; doing none of it would store files that could never be processed. The cost is
+that errors arrive in two ways, as an HTTP error or as a `FAILED` file, so I documented both
+lists in the error tables above.
 
-**Geometry stored as WGS84 GeoJSON.** Features are stored as GeoJSON in EPSG:4326 in a JSON column,
-not in the source CRS and not as a spatial type. Alternative: PostGIS geometry columns, which allow
-spatial queries but tie the app to Postgres. Trade-off: no spatial indexing, but the features
-endpoint serves stored JSON directly and both databases work.
+**Features stored as WGS84 GeoJSON.** Geometries are stored as GeoJSON in EPSG:4326 in a JSON
+column. PostGIS geometry columns would allow spatial queries and indexes, but would tie the app to
+Postgres and break the SQLite setup. With GeoJSON, the features endpoint can return stored JSON
+directly and both databases behave the same. I gave up spatial queries for now; PostGIS is the
+first item under Future scope.
 
-**Idempotent jobs.** A job claims its file with a conditional update from `PENDING` to
-`PROCESSING` and does nothing if the claim fails. Alternative: rely on each job running exactly
-once, which no queue guarantees. Trade-off: one extra query per job, and a repeated delivery can
-no longer duplicate rows or fail a finished file.
+**Idempotent jobs.** A job starts by claiming its file with a conditional update from `PENDING` to
+`PROCESSING`, and stops if the claim doesn't succeed. I added this after finding that running the
+same job twice turned a `COMPLETED` file into `FAILED`, because the second run hit a unique
+constraint while re-inserting features. BackgroundTasks runs a job once, but every queue I'd move
+to delivers at least once, so the job has to survive running twice. It costs one extra query per
+job.
 
 ## Known limitations
 
@@ -651,7 +665,46 @@ no longer duplicate rows or fail a finished file.
 
 ## Learnings
 
-TODO: written by the author
+**Know what the expected value means before writing the test.** The golden test asks for a
+1 km square to measure 1,000,000 m2. The obvious place to put it is the UTM central meridian, but
+UTM shrinks distances by 0.9996 there, so a 1000 m grid square is about 1,000,800 m2 on the
+ground, and a correct implementation would have failed. Checking the scale factor first led me to
+put the square where it is close to 1. A test is only as good as its expected value, and that
+value has to be right physically, not just look right.
+
+**Libraries have conventions you have to know.** pyproj's geodesic area adds up signed ring
+areas, so a polygon with a hole, if its rings aren't oriented, comes out larger than the polygon
+without the hole. I only caught this because I compared a polygon with a hole against the outer
+polygon minus the hole. GDAL was similar. It reports no CRS both when a shapefile has no `.prj` and
+when the `.prj` can't be parsed, and those need different error messages, so I had to check for
+the file myself. The KML driver adds columns such as `id` and `timestamp` that I first dropped as
+noise, until I noticed they hold each placemark's own id and its timestamps.
+
+**"Works on my machine" has many layers.** I developed on Windows and CI runs on Linux, and four
+separate things differed. `Path` only treats a backslash as a separator on Windows, so a storage
+key check that passed locally was weaker on Linux. PROJ gave coordinates that differed in the last
+bits. Zip compression produced different bytes for the same content. And pip evaluates
+platform-specific dependencies for the machine it runs on, so a lock file made on Windows was
+missing `uvloop`. Each one came out of a failing CI job, which is why I now trust CI more than my
+own laptop.
+
+**A green build only means something if failures turn it red.** At one point I piped pytest into
+`tee` to capture its output in CI, and the next build went green with failing tests, because the
+step took `tee`'s exit status instead of pytest's. I noticed only because the change shouldn't
+have fixed anything. Now when a build turns green unexpectedly, I look for the reason before
+moving on.
+
+**Small choices have large performance costs.** Building one equal-area CRS per feature cost
+1 to 4 ms per feature, depending on the machine. Equal-area projections preserve area everywhere, so the centre only needs to be
+near the feature, not exactly on it. Snapping centres to a 1 degree grid let features share
+projections and made that step 114 times faster with no loss of accuracy. Profiling the 60,000
+feature run showed where the time goes now: the geodesic check and the database inserts.
+
+**Measure what the client actually experiences.** The request log showed a 60,000 feature upload
+taking more than 10 seconds, but the client had its 202 in 56 ms. Starlette runs background tasks
+inside the same request call, so my timing included the processing. Logging when the last byte of
+the response is sent fixed it. The lesson was that a metric is only useful if I know exactly where
+it starts and stops.
 
 ## Future scope
 
